@@ -19,6 +19,7 @@ downloads/
 eggs/
 .eggs/
 lib/
+!electron/src/renderer/lib/
 lib64/
 parts/
 sdist/
