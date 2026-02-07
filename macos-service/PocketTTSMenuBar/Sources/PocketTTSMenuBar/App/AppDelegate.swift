@@ -267,6 +267,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         checkServerItem.target = self
         self.menu.addItem(checkServerItem)
 
+        // Restart Service
+        let restartServiceItem = NSMenuItem(
+            title: "Restart Service",
+            action: #selector(restartService),
+            keyEquivalent: ""
+        )
+        restartServiceItem.target = self
+        self.menu.addItem(restartServiceItem)
+
         self.menu.addItem(NSMenuItem.separator())
 
         // Open Main App
@@ -356,6 +365,41 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         Task { @MainActor in
             await serverManager.checkHealth()
             updateMenu()
+        }
+    }
+
+    @objc private func restartService() {
+        Task { @MainActor in
+            let success = await serverManager.restartService()
+
+            // Update menu immediately to show the restart happened
+            updateMenu()
+
+            // Wait a moment for health check to complete and update menu again
+            try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
+            updateMenu()
+
+            // Show notification (only if running as app bundle)
+            if Bundle.main.bundleIdentifier != nil {
+                let content = UNMutableNotificationContent()
+                content.title = "Pocket TTS"
+                content.body = success ? "Service restarted successfully" : "Failed to restart service"
+
+                let request = UNNotificationRequest(
+                    identifier: UUID().uuidString,
+                    content: content,
+                    trigger: nil
+                )
+
+                do {
+                    try await UNUserNotificationCenter.current().add(request)
+                    print("✓ Notification displayed: Service \(success ? "restarted" : "restart failed")")
+                } catch {
+                    print("Failed to show notification: \(error)")
+                }
+            } else {
+                print("✓ Service \(success ? "restarted" : "restart failed") (notification skipped - not running as app bundle)")
+            }
         }
     }
 

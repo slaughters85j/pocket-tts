@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Service identifier -->
+    <key>Label</key>
+    <string>com.kyutai.pocket-tts.menubar</string>
+
+    <!-- Program to run -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/PocketTTSMenuBar</string>
+    </array>
+
+    <!-- Auto-start on login -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Keep alive (restart if crashed) -->
+    <key>KeepAlive</key>
+    <true/>
+
+    <!-- Run only when user is logged in -->
+    <key>LimitLoadToSessionType</key>
+    <string>Aqua</string>
+
+    <!-- Standard output log (optional, for debugging) -->
+    <key>StandardOutPath</key>
+    <string>/tmp/pocket-tts-menubar.log</string>
+
+    <!-- Standard error log (optional, for debugging) -->
+    <key>StandardErrorPath</key>
+    <string>/tmp/pocket-tts-menubar-error.log</string>
+
+    <!-- Process type (important for GUI apps) -->
+    <key>ProcessType</key>
+    <string>Interactive</string>
+</dict>
+</plist>

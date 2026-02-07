@@ -82,6 +82,55 @@ class ServerManager: ObservableObject {
         startPeriodicHealthCheck()
     }
 
+    // Restart the TTS server service via launchctl
+    func restartService() async -> Bool {
+        let serviceLabel = "com.kyutai.pocket-tts.server"
+        let plistPath = "\(NSHomeDirectory())/Library/LaunchAgents/\(serviceLabel).plist"
+
+        // Step 1: Stop the service
+        let stopProcess = Process()
+        stopProcess.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+        stopProcess.arguments = ["stop", "gui/\(getuid())/\(serviceLabel)"]
+
+        do {
+            try stopProcess.run()
+            stopProcess.waitUntilExit()
+            print("✓ Service stopped")
+
+            // Wait a moment for clean shutdown
+            try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
+
+            // Step 2: Restart by unloading and loading the plist
+            let unloadProcess = Process()
+            unloadProcess.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+            unloadProcess.arguments = ["unload", plistPath]
+            try? unloadProcess.run()
+            unloadProcess.waitUntilExit()
+
+            let loadProcess = Process()
+            loadProcess.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+            loadProcess.arguments = ["load", plistPath]
+            try loadProcess.run()
+            loadProcess.waitUntilExit()
+
+            let success = loadProcess.terminationStatus == 0
+
+            if success {
+                print("✓ Service restarted successfully")
+                // Wait for service to start and check health
+                try? await Task.sleep(nanoseconds: 2_000_000_000) // 2 seconds
+                await checkHealth()
+            } else {
+                print("✗ Service restart failed with exit code: \(loadProcess.terminationStatus)")
+            }
+
+            return success
+        } catch {
+            print("✗ Failed to restart service: \(error)")
+            return false
+        }
+    }
+
     deinit {
         checkTask?.cancel()
     }

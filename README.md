@@ -26,6 +26,7 @@ Supports Python 3.10, 3.11, 3.12, 3.13 and 3.14. Requires PyTorch 2.5+. Does not
 * Voice cloning
 * English only at the moment
 * Can handle infinitely long text inputs
+* **WebSocket streaming**: Real-time text-to-speech with server-side audio playback
 * **macOS Quick Action**: System-wide text reading from any application
 
 ## Trying it from the website, without installing anything
@@ -67,13 +68,15 @@ For trying multiple voices and prompts quickly, prefer using the `serve` command
 
 ### The `serve` command
 
-You can also run a local server to generate audio via HTTP requests.
+You can also run a local server to generate audio via HTTP requests or WebSocket streaming.
 ```bash
 uvx pocket-tts serve
 # or if you installed it manually with pip:
 pocket-tts serve
 ```
 Navigate to `http://localhost:8000` to try the web interface, it's faster than the command line as the model is kept in memory between requests.
+
+**WebSocket Streaming:** The server also provides a `/stream-tts` WebSocket endpoint that accepts streaming text input and plays generated audio directly through the server's speakers. This enables real-time integration with AI assistants and messaging platforms. See the [serve documentation](https://github.com/kyutai-labs/pocket-tts/tree/main/docs/serve.md) for details.
 
 You can check out the [serve documentation](https://github.com/kyutai-labs/pocket-tts/tree/main/docs/serve.md) for more details and examples.
 
@@ -159,6 +162,78 @@ cd macos-service/scripts
 
 # Option 2: Run manually
 uv run pocket-tts serve --port 8765
+```
+
+### Service Management
+
+If you installed the LaunchAgent, you can manage the service from terminal:
+
+```bash
+# Restart the service
+launchctl kickstart -k gui/$(id -u)/com.kyutai.pocket-tts.server
+
+# Stop the service
+launchctl stop gui/$(id -u)/com.kyutai.pocket-tts.server
+
+# Start the service
+launchctl start gui/$(id -u)/com.kyutai.pocket-tts.server
+
+# Check service status
+launchctl list | grep pocket-tts
+
+# View service logs
+tail -f ~/Library/Logs/PocketTTS/server.log
+tail -f ~/Library/Logs/PocketTTS/server-error.log
+```
+
+Alternatively, use the **Menu Bar App** for convenient service control with the "Restart Service" option.
+
+### Menu Bar App (Optional)
+
+A native Swift app that provides a convenient menu bar interface for voice selection and server management.
+
+**Features:**
+- Voice selection dropdown
+- Server status monitoring
+- Restart service option
+- Refresh voices
+- Auto-start on login
+
+**Installation:**
+```bash
+cd macos-service/scripts
+./install-menubar.sh
+```
+
+This will:
+1. Install the app to `/usr/local/bin/PocketTTSMenuBar`
+2. Create a LaunchAgent for auto-start on login
+3. Launch the app immediately
+
+**Manual Commands:**
+```bash
+# Run once (for testing)
+/usr/local/bin/PocketTTSMenuBar &
+
+# Restart the menu bar app LaunchAgent
+launchctl unload ~/Library/LaunchAgents/com.kyutai.pocket-tts.menubar.plist
+launchctl load ~/Library/LaunchAgents/com.kyutai.pocket-tts.menubar.plist
+
+# Update the menu bar app binary (after rebuilding)
+launchctl unload ~/Library/LaunchAgents/com.kyutai.pocket-tts.menubar.plist
+sudo cp <path-to-new-build>/PocketTTSMenuBar /usr/local/bin/
+launchctl load ~/Library/LaunchAgents/com.kyutai.pocket-tts.menubar.plist
+
+# Uninstall
+cd macos-service/scripts
+./uninstall-menubar.sh
+
+# View logs
+tail -f /tmp/pocket-tts-menubar.log
+tail -f /tmp/pocket-tts-menubar-error.log
+
+# Check menu bar app status
+launchctl list | grep pocket-tts.menubar
 ```
 
 ### Usage
