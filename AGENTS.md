@@ -42,7 +42,7 @@ Pre-commit handles this automatically, but you can run manually:
 This is a pure Python package with Rust extensions in `training/rust_exts/audio_ds/` for training-time audio processing. The main package does not require building.
 
 ### macOS Service (Swift/Xcode Projects)
-The `macos-service/` directory contains Swift projects that require Xcode builds:
+The `macos-service/` directory contains Swift projects that require Xcode builds. **For all builds and Swift tests, follow the `xcode-and-swift-tests` skill** (`.cursor/skills/xcode-and-swift-tests/`).
 ```bash
 # Always use the xcode-builder-agent or xcodebuild-clean wrapper
 # DO NOT use bare `swift build` or `xcodebuild` (miniforge PATH conflicts)

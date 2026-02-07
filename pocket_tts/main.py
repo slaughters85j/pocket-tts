@@ -1,11 +1,15 @@
+import asyncio
 import base64
 import io
 import json
 import logging
 import os
+import queue
 import re
 import tempfile
 import threading
+import time
+import uuid
 import wave
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,13 +19,14 @@ from typing import Optional
 import numpy as np
 import typer
 import uvicorn
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from starlette import requests as starlette_requests
 from starlette.formparsers import MultiPartParser
 from typing_extensions import Annotated
 
+from pocket_tts.audio_playback import PlaybackConfig, ServerAudioPlayer
 from pocket_tts.data.audio import stream_audio_chunks
 from pocket_tts.default_parameters import (
     DEFAULT_AUDIO_PROMPT,
@@ -180,6 +185,11 @@ def apply_crossfade(audio1: np.ndarray, audio2: np.ndarray, crossfade_samples: i
 tts_model = None
 global_model_state = None
 
+# Global audio player and WebSocket state
+audio_player: ServerAudioPlayer | None = None
+generation_lock = asyncio.Lock()  # Enforce single concurrent generation (model constraint)
+active_sessions: dict[str, dict] = {}  # Track active WebSocket sessions
+
 web_app = FastAPI(
     title="Kyutai Pocket TTS API", description="Text-to-Speech generation API", version="1.0.0"
 )
@@ -206,6 +216,84 @@ async def root():
 @web_app.get("/health")
 async def health():
     return {"status": "healthy"}
+
+
+def extract_sentences(buffer: str) -> tuple[list[str], str]:
+    """
+    Extract complete sentences from text buffer.
+
+    Uses pysbd for robust sentence boundary detection. Falls back to simple
+    regex if pysbd is not available.
+
+    Args:
+        buffer: Text buffer to extract sentences from
+
+    Returns:
+        Tuple of (list of complete sentences, remaining buffer text)
+
+    Note:
+        Regex fallback has known limitations:
+        - Abbreviations (Dr., Mr., etc.) may cause false splits
+        - Decimal numbers (3.50) may cause false splits
+        - URLs may be split incorrectly
+    """
+    try:
+        import pysbd
+
+        segmenter = pysbd.Segmenter(language="en", clean=False)
+
+        # Segment the buffer
+        segments = segmenter.segment(buffer)
+
+        if not segments:
+            return [], buffer
+
+        # Check if buffer ends with sentence-ending punctuation
+        # If not, the last segment is incomplete
+        stripped_buffer = buffer.rstrip()
+        if stripped_buffer and stripped_buffer[-1] not in ".!?":
+            # Last segment is incomplete, keep it in buffer
+            if len(segments) > 1:
+                complete_sentences = segments[:-1]
+                remaining = segments[-1]
+            else:
+                # Only one incomplete segment
+                return [], buffer
+        else:
+            # All segments are complete
+            complete_sentences = segments
+            remaining = ""
+
+        # Filter out very short sentences (< 3 characters)
+        complete_sentences = [s.strip() for s in complete_sentences if len(s.strip()) >= 3]
+
+        return complete_sentences, remaining
+
+    except ImportError:
+        logger.warning("pysbd not available, using regex fallback for sentence detection")
+
+        # Fallback: simple regex pattern
+        # Matches sentence-ending punctuation followed by space or end of string
+        pattern = re.compile(r"([.!?]+)(\s+|$)")
+
+        sentences = []
+        remaining = buffer
+
+        while True:
+            match = pattern.search(remaining)
+            if not match:
+                break
+
+            # Extract sentence including punctuation
+            end_pos = match.end()
+            sentence = remaining[:end_pos].strip()
+
+            if sentence and len(sentence) >= 3:
+                sentences.append(sentence)
+
+            remaining = remaining[end_pos:].lstrip()
+
+        return sentences, remaining
 
 
 def write_to_queue(queue, text_to_generate, model_state):
@@ -307,6 +395,335 @@ def text_to_speech(
             "Transfer-Encoding": "chunked",
         },
     )
+
+
+@web_app.websocket("/stream-tts")
+async def stream_tts_websocket(websocket: WebSocket):
+    """
+    WebSocket endpoint for streaming text input with server-side audio playback.
+
+    Protocol:
+    - Client connects and optionally sends config message with voice
+    - Client streams text chunks
+    - Server buffers into sentences and generates audio
+    - Server plays audio directly to speakers
+    - Server sends status updates back to client
+
+    Messages:
+        Client → Server:
+            {"type": "config", "voice": "alba"} - Configure voice
+            {"type": "text", "data": "text chunk"} - Stream text
+            {"type": "complete"} - Signal end of text
+            {"type": "cancel"} - Cancel playback
+
+        Server → Client:
+            {"type": "connected"} - Connection ready
+            {"type": "ready"} - Voice configured
+            {"type": "sentence_received", "text": "..."} - Sentence buffered
+            {"type": "generating", "sentence_index": 0} - Started generation
+            {"type": "playing", "sentence_index": 0} - Started playback
+            {"type": "sentence_complete", "sentence_index": 0} - Finished sentence
+            {"type": "finished"} - All done
+            {"type": "backpressure", "queue_size": 5, "retry_after_ms": 500} - Queue full
+            {"type": "error", "code": "ERROR_CODE", "message": "..."} - Error
+    """
+    # Check if audio player is available
+    if audio_player is None:
+        await websocket.close(code=1008, reason="Audio device not available on server")
+        return
+
+    await websocket.accept()
+
+    # Assign session ID
+    session_id = str(uuid.uuid4())
+    logger.info(f"WebSocket connection established: session {session_id}")
+
+    try:
+        # Send connection acknowledgment
+        await websocket.send_json({"type": "connected", "message": "Ready to receive text"})
+
+        # State for this connection
+        text_buffer = ""
+        model_state = global_model_state  # Default voice
+        sentence_index = 0
+        last_text_time = time.time()
+        timeout_task: asyncio.Task | None = None
+        pending_sentences = 0  # Track sentences pending playback
+        all_complete_event = asyncio.Event()  # Signal when all sentences complete
+        loop = asyncio.get_event_loop()  # Event loop for callbacks
+
+        # Register session
+        active_sessions[session_id] = {"text_buffer": text_buffer, "model_state": model_state}
+
+        async def check_buffer_timeout():
+            """Check if buffer should be flushed due to timeout."""
+            nonlocal text_buffer, sentence_index
+
+            while True:
+                await asyncio.sleep(1.0)
+
+                # Check if buffer has text and timeout exceeded
+                if text_buffer and (time.time() - last_text_time) > 5.0:
+                    logger.info(f"Buffer timeout for session {session_id}, flushing: {text_buffer}")
+                    try:
+                        await process_sentence(text_buffer.strip(), sentence_index)
+                        text_buffer = ""
+                        sentence_index += 1
+                    except Exception as e:
+                        logger.error(f"Error flushing buffer on timeout: {e}", exc_info=True)
+                    break
+
+        async def process_sentence(sentence: str, idx: int):
+            """Generate and play audio for a complete sentence."""
+            nonlocal pending_sentences
+
+            if not sentence or len(sentence) < 3:
+                return
+
+            try:
+                # Notify client
+                await websocket.send_json({"type": "sentence_received", "text": sentence})
+
+                # Check backpressure
+                if audio_player.queue_size >= 5:
+                    await websocket.send_json({
+                        "type": "backpressure",
+                        "queue_size": audio_player.queue_size,
+                        "retry_after_ms": 500,
+                    })
+                    logger.warning(
+                        f"Backpressure for session {session_id}: queue_size={audio_player.queue_size}"
+                    )
+                    # Still process, but client is warned
+                    await asyncio.sleep(0.5)  # Brief pause to let queue drain
+
+                await websocket.send_json({"type": "generating", "sentence_index": idx})
+
+                # CRITICAL: Use generation_lock to enforce single concurrent generation
+                async with generation_lock:
+                    # Generate audio stream in executor (blocking operation)
+                    # NOTE: Must materialize generator to list since TTS model is not thread-safe
+                    # and we can't iterate the generator from the playback worker thread
+                    audio_chunks = await loop.run_in_executor(
+                        None,
+                        lambda: list(
+                            tts_model.generate_audio_stream(
+                                model_state=model_state, text_to_generate=sentence, copy_state=True
+                            )
+                        ),
+                    )
+
+                # Define callbacks for audio playback
+                async def on_start():
+                    try:
+                        await websocket.send_json({"type": "playing", "sentence_index": idx})
+                    except Exception as e:
+                        logger.error(f"Error in on_start callback for sentence {idx}: {e}", exc_info=True)
+
+                async def on_complete():
+                    try:
+                        nonlocal pending_sentences
+                        await websocket.send_json({"type": "sentence_complete", "sentence_index": idx})
+                        pending_sentences -= 1
+                        if pending_sentences == 0:
+                            all_complete_event.set()
+                    except Exception as e:
+                        logger.error(f"Error in on_complete callback for sentence {idx}: {e}", exc_info=True)
+
+                async def on_error(error):
+                    try:
+                        nonlocal pending_sentences
+                        await websocket.send_json({
+                            "type": "error",
+                            "code": "PLAYBACK_ERROR",
+                            "message": f"Playback error: {str(error)}",
+                        })
+                        pending_sentences -= 1
+                        if pending_sentences == 0:
+                            all_complete_event.set()
+                    except Exception as e:
+                        logger.error(f"Error in on_error callback: {e}", exc_info=True)
+
+                # Enqueue for playback
+                # Note: Callbacks are invoked from worker thread, so we use
+                # call_soon_threadsafe to schedule coroutines back to event loop
+                try:
+                    audio_player.enqueue_audio(
+                        audio_chunks,
+                        session_id=session_id,
+                        on_start=lambda: loop.call_soon_threadsafe(
+                            lambda: asyncio.create_task(on_start())
+                        ),
+                        on_complete=lambda: loop.call_soon_threadsafe(
+                            lambda: asyncio.create_task(on_complete())
+                        ),
+                        on_error=lambda e: loop.call_soon_threadsafe(
+                            lambda: asyncio.create_task(on_error(e))
+                        ),
+                    )
+                    pending_sentences += 1
+                except queue.Full:
+                    await websocket.send_json({
+                        "type": "error",
+                        "code": "CONCURRENT_LIMIT",
+                        "message": "Server is at maximum playback capacity",
+                    })
+
+            except Exception as e:
+                logger.error(f"Error processing sentence for session {session_id}: {e}", exc_info=True)
+                await websocket.send_json({
+                    "type": "error",
+                    "code": "GENERATION_ERROR",
+                    "message": f"Generation error: {str(e)}",
+                })
+
+        # Start timeout checker
+        timeout_task = asyncio.create_task(check_buffer_timeout())
+
+        try:
+            while True:
+                # Receive message from client
+                message = await websocket.receive_json()
+                msg_type = message.get("type")
+
+                if msg_type == "config":
+                    # Configure voice
+                    voice = message.get("voice")
+                    voice_data = message.get("voice_data")
+
+                    if voice_data:
+                        # Decode base64 voice and create temp file
+                        try:
+                            wav_bytes = base64.b64decode(voice_data)
+                            with tempfile.NamedTemporaryFile(
+                                delete=False, suffix=".wav"
+                            ) as temp:
+                                temp.write(wav_bytes)
+                                temp.flush()
+                                try:
+                                    model_state = tts_model.get_state_for_audio_prompt(
+                                        Path(temp.name), truncate=True
+                                    )
+                                finally:
+                                    os.unlink(temp.name)
+                        except Exception as e:
+                            logger.error(f"Error loading voice data: {e}", exc_info=True)
+                            await websocket.send_json({
+                                "type": "error",
+                                "code": "INVALID_VOICE",
+                                "message": f"Invalid voice data: {str(e)}",
+                            })
+                            continue
+
+                    elif voice:
+                        try:
+                            model_state = tts_model._cached_get_state_for_audio_prompt(
+                                voice, truncate=True
+                            )
+                        except Exception as e:
+                            logger.error(f"Error loading voice: {e}", exc_info=True)
+                            await websocket.send_json({
+                                "type": "error",
+                                "code": "INVALID_VOICE",
+                                "message": f"Invalid voice: {str(e)}",
+                            })
+                            continue
+
+                    await websocket.send_json({"type": "ready", "message": "Voice configured"})
+
+                elif msg_type == "text":
+                    # Append text to buffer
+                    text_chunk = message.get("data", "")
+                    text_buffer += text_chunk
+                    last_text_time = time.time()
+
+                    # Cancel and restart timeout
+                    if timeout_task and not timeout_task.done():
+                        timeout_task.cancel()
+                    timeout_task = asyncio.create_task(check_buffer_timeout())
+
+                    # Check for complete sentences
+                    sentences, text_buffer = extract_sentences(text_buffer)
+
+                    # Process each complete sentence
+                    for sentence in sentences:
+                        await process_sentence(sentence, sentence_index)
+                        sentence_index += 1
+
+                    # Check buffer size
+                    if len(text_buffer) > 10000:
+                        await websocket.send_json({
+                            "type": "error",
+                            "code": "BUFFER_OVERFLOW",
+                            "message": "Buffer overflow: text too long without sentence end",
+                        })
+                        break
+
+                elif msg_type == "complete":
+                    # Cancel timeout task
+                    if timeout_task and not timeout_task.done():
+                        timeout_task.cancel()
+
+                    # Flush any remaining buffer
+                    if text_buffer.strip():
+                        await process_sentence(text_buffer.strip(), sentence_index)
+
+                    # Wait for all audio to finish playing
+                    if pending_sentences > 0:
+                        await all_complete_event.wait()
+
+                    await websocket.send_json({
+                        "type": "finished",
+                        "message": "All audio playback complete",
+                    })
+                    break
+
+                elif msg_type == "cancel":
+                    # Cancel timeout task
+                    if timeout_task and not timeout_task.done():
+                        timeout_task.cancel()
+
+                    # Clear playback queue for this session
+                    audio_player.cancel_session(session_id)
+
+                    await websocket.send_json({
+                        "type": "cancelled",
+                        "message": "Playback cancelled",
+                    })
+                    break
+
+        finally:
+            # Cleanup timeout task
+            if timeout_task and not timeout_task.done():
+                timeout_task.cancel()
+
+    except WebSocketDisconnect:
+        logger.info(f"Client disconnected: session {session_id}")
+    except Exception as e:
+        logger.error(f"WebSocket error for session {session_id}: {e}", exc_info=True)
+        try:
+            await websocket.send_json({
+                "type": "error",
+                "code": "INTERNAL_ERROR",
+                "message": str(e),
+            })
+        except:
+            pass
+    finally:
+        # Cleanup session
+        if session_id in active_sessions:
+            del active_sessions[session_id]
+
+        # Cancel any queued audio for this session
+        if audio_player:
+            audio_player.cancel_session(session_id)
+
+        try:
+            await websocket.close()
+        except:
+            pass
+
+        logger.info(f"WebSocket connection closed: session {session_id}")
 
 
 @web_app.post("/multi-tts")
@@ -482,14 +899,39 @@ def serve(
 ):
     """Start the FastAPI server."""
 
-    global tts_model, global_model_state
+    global tts_model, global_model_state, audio_player
     tts_model = TTSModel.load_model(DEFAULT_VARIANT)
 
     # Pre-load the voice prompt
     global_model_state = tts_model.get_state_for_audio_prompt(voice)
     logger.info(f"The size of the model state is {size_of_dict(global_model_state) // 1e6} MB")
 
-    uvicorn.run("pocket_tts.main:web_app", host=host, port=port, reload=reload)
+    # Initialize audio player for server-side playback
+    playback_config = PlaybackConfig(
+        sample_rate=tts_model.config.mimi.sample_rate, channels=1, dtype="int16"
+    )
+
+    try:
+        audio_player = ServerAudioPlayer(playback_config)
+        audio_player.start()
+        logger.info("Audio player initialized on default device")
+    except RuntimeError as e:
+        logger.warning(f"Audio device not available: {e}")
+        logger.warning("WebSocket streaming endpoint (/stream-tts) will be disabled")
+        audio_player = None
+
+    try:
+        uvicorn.run("pocket_tts.main:web_app", host=host, port=port, reload=reload)
+    finally:
+        # Graceful shutdown sequence:
+        # 1. Signal existing WebSocket connections to close (handled by uvicorn)
+        # 2. Stop audio player (will finish current playback)
+        if audio_player:
+            logger.info("Stopping audio player...")
+            audio_player.stop()
+        # 3. Clear active sessions
+        active_sessions.clear()
+        logger.info("Server shutdown complete")
 
 
 # ------------------------------------------------------
