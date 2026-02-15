@@ -15,6 +15,7 @@ from torch.nn import functional as F
 from typing_extensions import Self
 
 from pocket_tts.conditioners.base import TokenizedText
+from pocket_tts.text_normalizer import normalize_text
 from pocket_tts.data.audio import audio_read
 from pocket_tts.data.audio_utils import convert_audio
 from pocket_tts.default_parameters import (
@@ -709,6 +710,11 @@ def prepare_text_prompt(text: str) -> tuple[str, int]:
     if text == "":
         raise ValueError("Text prompt cannot be empty")
     text = text.replace("\n", " ").replace("\r", " ").replace("  ", " ")
+
+    # Normalize numbers, units, abbreviations, etc. into speakable words
+    # before SentencePiece tokenization. Pure regex + num2words, ~microseconds.
+    text = normalize_text(text)
+
     number_of_words = len(text.split())
     if number_of_words <= 4:
         frames_after_eos_guess = 3

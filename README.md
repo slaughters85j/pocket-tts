@@ -62,6 +62,12 @@ for each voice.
 The `--voice` argument can also take a plain wav file as input for voice cloning.
 You can use your own or check out our [voice repository](https://huggingface.co/kyutai/tts-voices).
 
+> **Voice cloning requires the gated model.** The predefined voices above work out of the box, but custom voice cloning uses a separate set of model weights that require you to:
+> 1. Accept the terms at [huggingface.co/kyutai/pocket-tts](https://huggingface.co/kyutai/pocket-tts)
+> 2. Authenticate locally: `uvx hf auth login`
+>
+> Without this, custom voices will return a 500 error.
+
 Feel free to check out the [generate documentation](https://github.com/kyutai-labs/pocket-tts/tree/main/docs/generate.md) for more details and examples.
 For trying multiple voices and prompts quickly, prefer using the `serve` command.
 
@@ -113,18 +119,21 @@ npm run build:electron
 
 This creates platform-specific installers in the `electron/release/` folder.
 
-**Important:** If you've made changes to the Python code in `pocket_tts/`, you must reinstall the local package before rebuilding:
+**Note on code changes in `pocket_tts/`:**
 
-```bash
-# From the project root
-uv pip install -e .
-
-# Then rebuild
-cd electron/python && ./bundle-python.sh
-cd .. && npm run build:electron
-```
-
-PyInstaller bundles the *installed* package, not the source files directly. Without reinstalling, your changes won't be included in the build.
+- **LaunchAgent server (dev):** The package is installed in editable mode (`-e`), so Python source changes take effect immediately — just restart the service (`launchctl kickstart -k gui/$(id -u)/com.kyutai.pocket-tts.server`). No reinstall needed.
+- **New dependencies:** If you add a dependency to `pyproject.toml`, re-run the install from the **project root** (not a subdirectory):
+  ```bash
+  cd /path/to/pocket-tts
+  uv pip install -e .
+  ```
+- **Electron build:** PyInstaller bundles the *installed* package, not source files directly. You must reinstall and re-bundle before building:
+  ```bash
+  cd /path/to/pocket-tts
+  uv pip install -e .
+  cd electron/python && ./bundle-python.sh
+  cd electron && npm run build:electron
+  ```
 
 ## macOS Quick Action (System-Wide Text Reading)
 
