@@ -26,6 +26,13 @@ enum Constants {
     static let defaultServerPort = 8765
     static let defaultServerHost = "127.0.0.1"
 
+    // LaunchAgent configuration
+    static let launchAgentLabel = "com.kyutai.pocket-tts.server"
+    static let launchAgentPlistPath: String = {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        return "\(home)/Library/LaunchAgents/com.kyutai.pocket-tts.server.plist"
+    }()
+
     // Predefined voices
     static let predefinedVoices = [
         "alba", "marius", "javert", "jean",

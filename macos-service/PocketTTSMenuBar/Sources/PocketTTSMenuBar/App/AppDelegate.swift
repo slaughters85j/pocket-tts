@@ -8,6 +8,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var configManager: ConfigManager!
     private var voiceManager: VoiceManager!
     private var serverManager: ServerManager!
+    private var restartServiceItem: NSMenuItem?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         print("=== AppDelegate.applicationDidFinishLaunching ===")
@@ -267,6 +268,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         checkServerItem.target = self
         self.menu.addItem(checkServerItem)
 
+        // Restart Service
+        let restartItem = NSMenuItem(
+            title: "Restart Service",
+            action: #selector(restartService),
+            keyEquivalent: ""
+        )
+        restartItem.target = self
+        self.restartServiceItem = restartItem
+        self.menu.addItem(restartItem)
+
         self.menu.addItem(NSMenuItem.separator())
 
         // Open Main App
@@ -310,6 +321,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return "Server: Stopped ✗"
         case .unknown:
             return "Server: Checking..."
+        case .restarting:
+            return "Server: Restarting..."
         }
     }
 
@@ -356,6 +369,52 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         Task { @MainActor in
             await serverManager.checkHealth()
             updateMenu()
+        }
+    }
+
+    @objc private func restartService() {
+        // Disable menu item and show restarting state
+        restartServiceItem?.title = "Restarting..."
+        restartServiceItem?.isEnabled = false
+
+        Task { @MainActor in
+            updateMenu()
+
+            let success = await serverManager.restartService()
+
+            // Restore menu item and update status
+            updateMenu()
+
+            if Bundle.main.bundleIdentifier != nil {
+                let content = UNMutableNotificationContent()
+                content.title = "Pocket TTS"
+                content.body = success
+                    ? "Server restarted successfully"
+                    : "Server restart failed - check logs"
+
+                let request = UNNotificationRequest(
+                    identifier: UUID().uuidString,
+                    content: content,
+                    trigger: nil
+                )
+
+                do {
+                    try await UNUserNotificationCenter.current().add(request)
+                } catch {
+                    print("Failed to show restart notification: \(error)")
+                }
+            } else {
+                print(success
+                    ? "Server restarted successfully"
+                    : "Server restart failed")
+            }
+
+            if !success {
+                showErrorAlert(
+                    "Server restart failed. Check logs at:\n"
+                    + "~/Library/Logs/PocketTTS/server-error.log"
+                )
+            }
         }
     }
 
