@@ -328,6 +328,21 @@ _CURRENCY_NAMES = {
     "£": ("pound", "pounds"),
 }
 
+# Currency with magnitude words: $3.5 billion, €12 million, £200 thousand
+_CURRENCY_MAGNITUDE_PATTERN = re.compile(
+    r"([$€£])(\d+(?:\.\d+)?)\s*(billion|million|trillion|thousand)\b",
+    re.IGNORECASE,
+)
+
+
+def _expand_currency_magnitude(match: re.Match) -> str:
+    symbol = match.group(1)
+    number_str = match.group(2)
+    magnitude = match.group(3).lower()
+    _, plural = _CURRENCY_NAMES.get(symbol, ("unit", "units"))
+    number_words = _number_to_words(number_str)
+    return f"{number_words} {magnitude} {plural}"
+
 # Percentage: 50%, 3.5%
 _PERCENT_PATTERN = re.compile(r"(\d+(?:\.\d+)?)%")
 
@@ -442,6 +457,8 @@ _SPOKEN_ACRONYMS = {
     "NASA", "NATO", "ASAP", "LASER", "RADAR", "SCUBA",
     # ISR / Remote Sensing / Defense
     "LIDAR", "SONAR", "FLIR", "NADIR",
+    # Common words that happen to be all-caps
+    "OK",
 }
 
 
@@ -811,7 +828,10 @@ def normalize_text(text: str) -> str:
     # 1. Expand abbreviations first (before we mess with punctuation)
     text = _ABBREV_PATTERN.sub(_expand_abbreviation, text)
 
-    # 2. Currency (before general numbers eat the digits)
+    # 2a. Currency with magnitude words ($3.5 billion, €12 million)
+    text = _CURRENCY_MAGNITUDE_PATTERN.sub(_expand_currency_magnitude, text)
+
+    # 2b. Simple currency ($100, $3.50)
     text = _CURRENCY_PATTERN.sub(_expand_currency, text)
 
     # 3. Percentages
