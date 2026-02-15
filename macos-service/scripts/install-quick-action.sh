@@ -67,11 +67,16 @@ if [ ! -d "/usr/local/bin" ]; then
     sudo mkdir -p /usr/local/bin
 fi
 
+# Re-sign binary with codesign (removes linker-signed flag that macOS taskgated
+# rejects when launching from Automator Quick Actions / system services)
+echo "Signing binary with ad-hoc codesign..."
+codesign --force --sign - "$BINARY_PATH"
+
 # Copy binary (requires sudo)
 echo "Installing binary to $INSTALL_PATH (requires sudo)..."
 if sudo cp "$BINARY_PATH" "$INSTALL_PATH"; then
     sudo chmod +x "$INSTALL_PATH"
-    echo -e "${GREEN}✓${NC} Binary installed"
+    echo -e "${GREEN}✓${NC} Binary installed and signed"
 else
     echo -e "${RED}✗${NC} Failed to install binary"
     exit 1

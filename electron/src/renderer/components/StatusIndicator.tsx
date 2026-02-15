@@ -6,6 +6,7 @@ interface StatusIndicatorProps {
   timeToFirstAudio: number | null;
   totalTime: number | null;
   error: string | null;
+  isPaused?: boolean;
 }
 
 export function StatusIndicator({
@@ -13,6 +14,7 @@ export function StatusIndicator({
   timeToFirstAudio,
   totalTime,
   error,
+  isPaused,
 }: StatusIndicatorProps) {
   if (status === 'idle') return null;
 
@@ -32,14 +34,28 @@ export function StatusIndicator({
 
         {status === 'streaming' && (
           <div className="flex items-center gap-2">
-            <div className="flex gap-1">
-              <div className="w-1.5 h-4 bg-accent rounded-full animate-pulse" style={{ animationDelay: '0ms' }} />
-              <div className="w-1.5 h-4 bg-accent rounded-full animate-pulse" style={{ animationDelay: '150ms' }} />
-              <div className="w-1.5 h-4 bg-accent rounded-full animate-pulse" style={{ animationDelay: '300ms' }} />
-            </div>
-            <span className="text-sm text-text-primary">
-              Playing... (first audio in {timeToFirstAudio?.toFixed(2)}s)
-            </span>
+            {isPaused ? (
+              <>
+                <svg className="w-4 h-4 text-yellow-500" fill="currentColor" viewBox="0 0 24 24">
+                  <rect x="6" y="4" width="4" height="16" rx="1" />
+                  <rect x="14" y="4" width="4" height="16" rx="1" />
+                </svg>
+                <span className="text-sm text-text-primary">
+                  Paused (first audio in {timeToFirstAudio?.toFixed(2)}s)
+                </span>
+              </>
+            ) : (
+              <>
+                <div className="flex gap-1">
+                  <div className="w-1.5 h-4 bg-accent rounded-full animate-pulse" style={{ animationDelay: '0ms' }} />
+                  <div className="w-1.5 h-4 bg-accent rounded-full animate-pulse" style={{ animationDelay: '150ms' }} />
+                  <div className="w-1.5 h-4 bg-accent rounded-full animate-pulse" style={{ animationDelay: '300ms' }} />
+                </div>
+                <span className="text-sm text-text-primary">
+                  Playing... (first audio in {timeToFirstAudio?.toFixed(2)}s)
+                </span>
+              </>
+            )}
           </div>
         )}
 
@@ -50,6 +66,18 @@ export function StatusIndicator({
             </svg>
             <span className="text-sm text-text-primary">
               Complete! First audio: {timeToFirstAudio?.toFixed(2)}s | Total: {totalTime?.toFixed(2)}s
+            </span>
+          </div>
+        )}
+
+        {status === 'cancelled' && (
+          <div className="flex items-center gap-2">
+            <svg className="w-4 h-4 text-yellow-500" fill="currentColor" viewBox="0 0 24 24">
+              <rect x="6" y="6" width="12" height="12" rx="2" />
+            </svg>
+            <span className="text-sm text-text-primary">
+              Stopped by user
+              {timeToFirstAudio ? ` (first audio in ${timeToFirstAudio.toFixed(2)}s)` : ''}
             </span>
           </div>
         )}

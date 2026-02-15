@@ -23,6 +23,9 @@ interface MultiTTSParams {
   crossfade_ms?: number;
 }
 
+// Module-level abort controller for cancelling in-flight TTS requests
+let currentAbortController: AbortController | null = null;
+
 export function registerIpcHandlers(
   getPythonServer: () => PythonServer | null,
   voiceManager: { getVoiceFilePath: (id: string) => string | null }
@@ -36,6 +39,15 @@ export function registerIpcHandlers(
       sender.send('tts:error', 'TTS server is not running. Please restart the app or check the Python server.');
       return;
     }
+
+    // Cancel any previous in-flight request
+    if (currentAbortController) {
+      currentAbortController.abort();
+      currentAbortController = null;
+    }
+
+    const abortController = new AbortController();
+    currentAbortController = abortController;
 
     try {
       const formData = new FormData();
@@ -61,6 +73,7 @@ export function registerIpcHandlers(
       const response = await fetch(`http://localhost:${pythonServer.port}/tts`, {
         method: 'POST',
         body: formData,
+        signal: abortController.signal,
       });
 
       if (!response.ok) {
@@ -86,9 +99,20 @@ export function registerIpcHandlers(
         sender.send('tts:complete');
       }
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      if (!sender.isDestroyed()) {
-        sender.send('tts:error', errorMessage);
+      if (error instanceof Error && error.name === 'AbortError') {
+        // Request was cancelled by user — not an error
+        if (!sender.isDestroyed()) {
+          sender.send('tts:cancelled');
+        }
+      } else {
+        const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+        if (!sender.isDestroyed()) {
+          sender.send('tts:error', errorMessage);
+        }
+      }
+    } finally {
+      if (currentAbortController === abortController) {
+        currentAbortController = null;
       }
     }
   });
@@ -103,6 +127,15 @@ export function registerIpcHandlers(
       sender.send('tts:error', 'TTS server is not running. Please restart the app or check the Python server.');
       return;
     }
+
+    // Cancel any previous in-flight request
+    if (currentAbortController) {
+      currentAbortController.abort();
+      currentAbortController = null;
+    }
+
+    const abortController = new AbortController();
+    currentAbortController = abortController;
 
     try {
       // Resolve saved voices to base64 data
@@ -133,6 +166,7 @@ export function registerIpcHandlers(
       const response = await fetch(`http://localhost:${pythonServer.port}/multi-tts`, {
         method: 'POST',
         body: formData,
+        signal: abortController.signal,
       });
 
       if (!response.ok) {
@@ -163,10 +197,28 @@ export function registerIpcHandlers(
         sender.send('tts:complete');
       }
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      if (!sender.isDestroyed()) {
-        sender.send('tts:error', errorMessage);
+      if (error instanceof Error && error.name === 'AbortError') {
+        if (!sender.isDestroyed()) {
+          sender.send('tts:cancelled');
+        }
+      } else {
+        const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+        if (!sender.isDestroyed()) {
+          sender.send('tts:error', errorMessage);
+        }
       }
+    } finally {
+      if (currentAbortController === abortController) {
+        currentAbortController = null;
+      }
+    }
+  });
+
+  // Cancel in-flight TTS request
+  ipcMain.handle('tts:cancel', async () => {
+    if (currentAbortController) {
+      currentAbortController.abort();
+      currentAbortController = null;
     }
   });
 }

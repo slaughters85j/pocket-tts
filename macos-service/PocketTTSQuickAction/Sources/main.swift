@@ -5,6 +5,74 @@ import UserNotifications
 /// CLI tool for Quick Action TTS
 /// Usage: pocket-tts-quick-action "text to speak"
 
+// MARK: - Global References for Signal Handlers
+
+// These must be global so signal handlers (which are C function pointers) can access them.
+var globalClient: TTSClient?
+var globalPlayer: StreamingWAVPlayer?
+var globalSemaphore: DispatchSemaphore?
+
+/// Path to the PID file used by the Menu Bar app to send stop signals
+let pidFilePath = Constants.appSupportDirectory.appendingPathComponent(".tts-pid")
+
+// MARK: - PID File Management
+
+func writePIDFile() {
+    let pid = ProcessInfo.processInfo.processIdentifier
+    try? FileManager.default.createDirectory(
+        at: Constants.appSupportDirectory,
+        withIntermediateDirectories: true
+    )
+    try? "\(pid)".write(to: pidFilePath, atomically: true, encoding: .utf8)
+}
+
+func removePIDFile() {
+    try? FileManager.default.removeItem(at: pidFilePath)
+}
+
+// MARK: - Signal Handling
+
+// Dispatch sources that handle signals safely on a GCD queue (not in signal context).
+// Stored globally to prevent deallocation.
+var sigtermSource: DispatchSourceSignal?
+var sigintSource: DispatchSourceSignal?
+
+/// Installs signal handlers using GCD dispatch sources.
+///
+/// POSIX `signal()` handlers can only call async-signal-safe functions.
+/// Swift method calls, Foundation I/O, print(), and ARC operations are all
+/// unsafe in signal context. `DispatchSource.makeSignalSource` delivers signals
+/// as GCD events on a normal queue where arbitrary Swift code is safe to run.
+func installSignalHandlers() {
+    // Block default signal handling — dispatch sources require this
+    signal(SIGTERM, SIG_IGN)
+    signal(SIGINT, SIG_IGN)
+
+    let termSource = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
+    termSource.setEventHandler {
+        print("\nReceived SIGTERM, stopping...")
+        handleShutdown()
+    }
+    termSource.resume()
+    sigtermSource = termSource
+
+    let intSource = DispatchSource.makeSignalSource(signal: SIGINT, queue: .main)
+    intSource.setEventHandler {
+        print("\nReceived SIGINT, stopping...")
+        handleShutdown()
+    }
+    intSource.resume()
+    sigintSource = intSource
+}
+
+/// Performs graceful shutdown — safe to call from any GCD queue context.
+func handleShutdown() {
+    globalClient?.cancel()
+    globalPlayer?.stop()
+    removePIDFile()
+    globalSemaphore?.signal()
+}
+
 // MARK: - Main Entry Point
 
 func main() {
@@ -38,11 +106,19 @@ func main() {
     print("Server: \(serverURL)")
     print("Generating speech...")
 
+    // Write PID file so Menu Bar app can send stop signal
+    writePIDFile()
+
+    // Install signal handlers for graceful stop
+    installSignalHandlers()
+
     // Create audio player
     let player = StreamingWAVPlayer()
+    globalPlayer = player
 
     // Track completion
     let semaphore = DispatchSemaphore(value: 0)
+    globalSemaphore = semaphore
     var hasError = false
 
     // Set up callbacks
@@ -63,6 +139,7 @@ func main() {
 
     // Create TTS client and make request
     let client = TTSClient(serverURL: serverURL)
+    globalClient = client
 
     do {
         try client.streamSpeech(
@@ -72,11 +149,14 @@ func main() {
             player: player
         )
 
-        // Wait for playback to complete
+        // Wait for playback to complete (or signal handler to fire)
         semaphore.wait()
 
         // Stop player
         player.stop()
+
+        // Clean up PID file
+        removePIDFile()
 
         // Exit with appropriate code
         exit(hasError ? 1 : 0)
@@ -88,6 +168,9 @@ func main() {
             title: "Pocket TTS Error",
             message: error.localizedDescription
         )
+
+        // Clean up PID file
+        removePIDFile()
 
         exit(1)
     }
@@ -122,9 +205,13 @@ func showNotification(title: String, message: String) {
 
 // MARK: - Run
 
-// Keep the run loop alive for async operations
+// Run main() on a background queue so it can block on semaphore.wait().
+// dispatchMain() properly drains GCD's main dispatch queue — unlike
+// RunLoop.main.run(), which may not process GCD blocks in a command-line
+// tool after AVAudioEngine goes idle. Signal dispatch sources and
+// DispatchQueue.main.asyncAfter both depend on this.
 DispatchQueue.global().async {
     main()
 }
 
-RunLoop.main.run()
+dispatchMain()

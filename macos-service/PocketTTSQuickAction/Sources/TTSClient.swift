@@ -3,9 +3,19 @@ import Foundation
 /// Client for making TTS requests to the Pocket TTS server
 class TTSClient {
     private let serverURL: String
+    private var currentTask: URLSessionDataTask?
+    private var currentSession: URLSession?
 
     init(serverURL: String) {
         self.serverURL = serverURL
+    }
+
+    /// Cancel any in-flight TTS request
+    func cancel() {
+        currentTask?.cancel()
+        currentTask = nil
+        currentSession?.invalidateAndCancel()
+        currentSession = nil
     }
 
     /// Generate TTS audio for the given text and voice
@@ -77,6 +87,7 @@ class TTSClient {
 
         // Create URLSession for streaming response
         let session = URLSession(configuration: .default, delegate: nil, delegateQueue: nil)
+        currentSession = session
 
         let task = session.dataTask(with: request) { data, response, error in
             if let error = error {
@@ -104,6 +115,7 @@ class TTSClient {
             onComplete()
         }
 
+        currentTask = task
         task.resume()
     }
 
@@ -157,8 +169,10 @@ class TTSClient {
         // Create streaming delegate
         let delegate = StreamingDelegate(player: player)
         let session = URLSession(configuration: .default, delegate: delegate, delegateQueue: nil)
+        currentSession = session
 
         let task = session.dataTask(with: request)
+        currentTask = task
         task.resume()
 
         // Keep the session alive
@@ -187,6 +201,11 @@ private class StreamingDelegate: NSObject, URLSessionDataDelegate {
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
         if let error = error {
+            // Ignore cancellation errors — they are expected when user stops playback
+            if (error as NSError).code == NSURLErrorCancelled {
+                print("Stream cancelled by user")
+                return
+            }
             print("Streaming error: \(error)")
             player.onError?(error)
         } else {

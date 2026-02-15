@@ -1,4 +1,6 @@
+import asyncio
 import base64
+import importlib.metadata
 import io
 import json
 import logging
@@ -6,6 +8,7 @@ import os
 import re
 import tempfile
 import threading
+import time
 import wave
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,7 +20,7 @@ import typer
 import uvicorn
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from starlette import requests as starlette_requests
 from starlette.formparsers import MultiPartParser
 from typing_extensions import Annotated
@@ -181,7 +184,9 @@ tts_model = None
 global_model_state = None
 
 web_app = FastAPI(
-    title="Kyutai Pocket TTS API", description="Text-to-Speech generation API", version="1.0.0"
+    title="Kyutai Pocket TTS API",
+    description="Text-to-Speech generation API",
+    version=importlib.metadata.version("pocket-tts"),
 )
 web_app.add_middleware(
     CORSMiddleware,
@@ -208,7 +213,7 @@ async def health():
     return {"status": "healthy"}
 
 
-def write_to_queue(queue, text_to_generate, model_state):
+def write_to_queue(queue, text_to_generate, model_state, cancel_event=None):
     """Allows writing to the StreamingResponse as if it were a file."""
 
     class FileLikeToQueue(io.IOBase):
@@ -225,32 +230,61 @@ def write_to_queue(queue, text_to_generate, model_state):
             self.queue.put(None)
 
     audio_chunks = tts_model.generate_audio_stream(
-        model_state=model_state, text_to_generate=text_to_generate
+        model_state=model_state, text_to_generate=text_to_generate, cancel_event=cancel_event
     )
     stream_audio_chunks(FileLikeToQueue(queue), audio_chunks, tts_model.config.mimi.sample_rate)
 
 
-def generate_data_with_state(text_to_generate: str, model_state: dict):
+def generate_data_with_state(
+    text_to_generate: str, model_state: dict, request: starlette_requests.Request | None = None
+):
     queue = Queue()
+    cancel_event = threading.Event()
 
-    # Run your function in a thread
-    thread = threading.Thread(target=write_to_queue, args=(queue, text_to_generate, model_state))
+    # Watchdog thread to detect client disconnect and cancel generation
+    if request is not None:
+
+        def watch_disconnect():
+            loop = asyncio.new_event_loop()
+            try:
+                while not cancel_event.is_set():
+                    try:
+                        disconnected = loop.run_until_complete(request.is_disconnected())
+                        if disconnected:
+                            logging.info("Client disconnected, cancelling TTS generation")
+                            cancel_event.set()
+                            # Put None to unblock the main generator if it's waiting on queue.get()
+                            queue.put(None)
+                            break
+                    except Exception:
+                        break
+                    time.sleep(0.1)
+            finally:
+                loop.close()
+
+        watchdog = threading.Thread(target=watch_disconnect, daemon=True)
+        watchdog.start()
+
+    # Run generation in a thread
+    thread = threading.Thread(
+        target=write_to_queue, args=(queue, text_to_generate, model_state, cancel_event)
+    )
     thread.start()
 
     # Yield data as it becomes available
-    i = 0
     while True:
         data = queue.get()
         if data is None:
             break
-        i += 1
         yield data
 
+    cancel_event.set()  # Ensure watchdog stops
     thread.join()
 
 
 @web_app.post("/tts")
 def text_to_speech(
+    request: starlette_requests.Request,
     text: str = Form(...),
     voice_url: str | None = Form(None),
     voice_wav: UploadFile | None = File(None),
@@ -300,7 +334,7 @@ def text_to_speech(
         model_state = global_model_state
 
     return StreamingResponse(
-        generate_data_with_state(text, model_state),
+        generate_data_with_state(text, model_state, request=request),
         media_type="audio/wav",
         headers={
             "Content-Disposition": "attachment; filename=generated_speech.wav",
@@ -311,7 +345,10 @@ def text_to_speech(
 
 @web_app.post("/multi-tts")
 def multi_talk_to_speech(
-    script: str = Form(...), speakers: str = Form(...), crossfade_ms: int = Form(100)
+    request: starlette_requests.Request,
+    script: str = Form(...),
+    speakers: str = Form(...),
+    crossfade_ms: int = Form(100),
 ):
     """
     Generate multi-speaker audio from a script with speaker tags.
@@ -321,7 +358,6 @@ def multi_talk_to_speech(
         speakers: JSON array of speaker configs
         crossfade_ms: Crossfade duration between segments in milliseconds
     """
-    import torch
 
     if not script.strip():
         raise HTTPException(status_code=400, detail="Script cannot be empty")
@@ -409,6 +445,28 @@ def multi_talk_to_speech(
     sample_rate = tts_model.config.mimi.sample_rate
     crossfade_samples = int(crossfade_ms * sample_rate / 1000)
 
+    # Set up cancellation for client disconnect detection
+    cancel_event = threading.Event()
+
+    def watch_disconnect():
+        loop = asyncio.new_event_loop()
+        try:
+            while not cancel_event.is_set():
+                try:
+                    disconnected = loop.run_until_complete(request.is_disconnected())
+                    if disconnected:
+                        logging.info("Client disconnected during multi-TTS, cancelling")
+                        cancel_event.set()
+                        break
+                except Exception:
+                    break
+                time.sleep(0.1)
+        finally:
+            loop.close()
+
+    watchdog = threading.Thread(target=watch_disconnect, daemon=True)
+    watchdog.start()
+
     def generate_progressive_wav():
         """Generator that yields WAV data progressively as segments are generated."""
         # Write WAV header first (with placeholder length)
@@ -426,6 +484,9 @@ def multi_talk_to_speech(
         prev_tail = None
 
         for i, segment in enumerate(segments):
+            if cancel_event.is_set():
+                logging.info("Multi-TTS generation cancelled at segment %d", i)
+                break
             state = voice_states[segment.speaker_name]
             audio = tts_model.generate_audio(model_state=state, text_to_generate=segment.text)
             audio_np = audio.squeeze().numpy()
@@ -460,6 +521,8 @@ def multi_talk_to_speech(
                 else:
                     # Segment too short, just hold it all for crossfade
                     prev_tail = audio_np
+
+        cancel_event.set()  # Ensure watchdog stops
 
     return StreamingResponse(
         generate_progressive_wav(),

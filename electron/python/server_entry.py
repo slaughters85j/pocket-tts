@@ -1,4 +1,5 @@
 """Entry point for PyInstaller bundled server."""
+
 import sys
 
 

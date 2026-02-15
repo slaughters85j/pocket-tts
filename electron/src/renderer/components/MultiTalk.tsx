@@ -1,6 +1,7 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { SpeakerCard, Speaker } from './SpeakerCard';
 import { AudioPlayer } from './AudioPlayer';
+import { SynthesizeButton } from './SynthesizeButton';
 import { StatusIndicator } from './StatusIndicator';
 import { StreamingWavPlayer } from '../lib/streaming-wav-player';
 import { GenerationStatus } from '../App';
@@ -73,6 +74,7 @@ export function MultiTalk({ pendingConfig, onConfigLoaded }: MultiTalkProps) {
     error: null,
   });
   const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
+  const [isPaused, setIsPaused] = useState(false);
 
   // Load config from history when pendingConfig changes
   useEffect(() => {
@@ -215,6 +217,7 @@ export function MultiTalk({ pendingConfig, onConfigLoaded }: MultiTalkProps) {
       error: null,
     });
     setAudioBlob(null);
+    setIsPaused(false);
     playerRef.current?.stop();
 
     startTimeRef.current = performance.now();
@@ -293,6 +296,16 @@ export function MultiTalk({ pendingConfig, onConfigLoaded }: MultiTalkProps) {
       }));
     });
 
+    window.electronAPI.onTTSCancelled(() => {
+      setGenerationState((prev) => ({
+        ...prev,
+        status: 'cancelled',
+      }));
+      if (playerRef.current) {
+        setAudioBlob(playerRef.current.getAudioBlob());
+      }
+    });
+
     // Build speakers data
     const speakersData = speakers.map((s) => ({
       name: s.name,
@@ -320,6 +333,29 @@ export function MultiTalk({ pendingConfig, onConfigLoaded }: MultiTalkProps) {
       }));
     }
   }, [script, speakers]);
+
+  const handleStop = useCallback(() => {
+    playerRef.current?.stop();
+    window.electronAPI?.cancelTTS();
+    setIsPaused(false);
+    if (playerRef.current) {
+      setAudioBlob(playerRef.current.getAudioBlob());
+    }
+    setGenerationState((prev) => ({
+      ...prev,
+      status: 'cancelled',
+    }));
+  }, []);
+
+  const handlePause = useCallback(() => {
+    playerRef.current?.pause();
+    setIsPaused(true);
+  }, []);
+
+  const handleResume = useCallback(() => {
+    playerRef.current?.resume();
+    setIsPaused(false);
+  }, []);
 
   const handleExport = useCallback(() => {
     const config: MultiTalkConfig = {
@@ -507,19 +543,16 @@ export function MultiTalk({ pendingConfig, onConfigLoaded }: MultiTalkProps) {
         </p>
       </div>
 
-      {/* Generate Button */}
-      <button
+      {/* Generate / Playback Controls */}
+      <SynthesizeButton
         onClick={handleGenerate}
-        disabled={isGenerating || !script.trim()}
-        className={`w-full py-3 rounded-lg text-white font-medium text-sm transition-all
-          ${
-            isGenerating || !script.trim()
-              ? 'bg-accent/50 cursor-not-allowed'
-              : 'bg-accent hover:bg-accent-hover active:scale-[0.99]'
-          }`}
-      >
-        {isGenerating ? 'Generating...' : 'Generate Multi-Talk Audio'}
-      </button>
+        onStop={handleStop}
+        onPause={handlePause}
+        onResume={handleResume}
+        status={generationState.status}
+        isPaused={isPaused}
+        disabled={!script.trim()}
+      />
 
       {/* Status Indicator */}
       <StatusIndicator
@@ -527,6 +560,7 @@ export function MultiTalk({ pendingConfig, onConfigLoaded }: MultiTalkProps) {
         timeToFirstAudio={generationState.timeToFirstAudio}
         totalTime={generationState.totalTime}
         error={generationState.error}
+        isPaused={isPaused}
       />
 
       {/* Audio Player */}

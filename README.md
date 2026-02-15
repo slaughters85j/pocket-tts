@@ -135,6 +135,22 @@ This creates platform-specific installers in the `electron/release/` folder.
   cd electron && npm run build:electron
   ```
 
+### Rebuilding Everything at Once
+
+Instead of manually updating each component, you can use the `rebuild-all.sh` script to update the Python package, Electron app, macOS Quick Action, and LaunchAgent in one shot:
+
+```bash
+./scripts/rebuild-all.sh              # rebuild everything
+./scripts/rebuild-all.sh --skip-electron   # Python + macOS only
+./scripts/rebuild-all.sh --skip-macos      # Python + Electron only
+```
+
+This runs the following steps in order:
+1. **Python editable install** (`uv pip install -e .`)
+2. **Electron app** — `npm install`, PyInstaller bundle, `npm run build:electron`
+3. **macOS Quick Action + Menu Bar App** — Swift builds, installs CLI binary and Automator workflow
+4. **LaunchAgent restart** — restarts the background TTS server if it's loaded
+
 ## macOS Quick Action (System-Wide Text Reading)
 
 A native macOS service that lets you read selected text aloud from any application using Pocket TTS.
