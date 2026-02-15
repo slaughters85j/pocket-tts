@@ -156,7 +156,7 @@ class StreamingWAVPlayer {
 
         // If more data is available, schedule next buffer
         if pcmData.count >= minBufferSize {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) { [weak self] in
+            DispatchQueue.global().asyncAfter(deadline: .now() + 0.01) { [weak self] in
                 self?.tryPlayBuffer()
             }
         }
@@ -267,15 +267,15 @@ class StreamingWAVPlayer {
     private func completePlayback() {
         guard isFinishing else { return }
 
-        // Calculate actual playback duration based on total frames scheduled
         let playbackDuration = Double(totalFramesScheduled) / sampleRate
+        print("Total frames: \(totalFramesScheduled), Duration: \(playbackDuration)s")
 
-        // Add a small buffer (200ms) to ensure all audio has played through the system
-        let waitTime = playbackDuration + 0.2
-
-        print("Total frames: \(totalFramesScheduled), Duration: \(playbackDuration)s, Waiting: \(waitTime)s")
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + waitTime) { [weak self] in
+        // The scheduleBuffer completion already means the last buffer was consumed
+        // by AVAudioEngine. Small delay (200ms) lets the audio pipeline fully drain
+        // to the hardware DAC. Use global queue — DispatchQueue.main is unreliable
+        // in command-line tools where RunLoop.main may not drain GCD blocks after
+        // AVAudioEngine goes idle.
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.2) { [weak self] in
             self?.onComplete?()
         }
     }

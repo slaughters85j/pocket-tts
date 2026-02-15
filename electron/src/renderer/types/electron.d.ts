@@ -30,8 +30,10 @@ export interface ElectronAPI {
   getServerPort: () => Promise<number>;
   generateTTS: (params: TTSParams) => Promise<void>;
   generateMultiTTS: (params: MultiTTSParams) => Promise<void>;
+  cancelTTS: () => Promise<void>;
   onTTSChunk: (callback: (chunk: ArrayBuffer) => void) => void;
   onTTSComplete: (callback: () => void) => void;
+  onTTSCancelled: (callback: () => void) => void;
   onTTSError: (callback: (error: string) => void) => void;
   removeAllListeners: () => void;
   // Voice management

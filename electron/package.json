@@ -1,6 +1,6 @@
 {
   "name": "pocket-tts-electron",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Desktop GUI for Pocket TTS",
   "main": "out/main/index.js",
   "author": "Kyutai",

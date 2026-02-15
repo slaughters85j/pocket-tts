@@ -32,8 +32,10 @@ export interface ElectronAPI {
   getServerPort: () => Promise<number>;
   generateTTS: (params: TTSParams) => Promise<void>;
   generateMultiTTS: (params: MultiTTSParams) => Promise<void>;
+  cancelTTS: () => Promise<void>;
   onTTSChunk: (callback: (chunk: ArrayBuffer) => void) => void;
   onTTSComplete: (callback: () => void) => void;
+  onTTSCancelled: (callback: () => void) => void;
   onTTSError: (callback: (error: string) => void) => void;
   removeAllListeners: () => void;
   // Voice management
@@ -48,11 +50,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getServerPort: () => ipcRenderer.invoke('get-server-port'),
   generateTTS: (params: TTSParams) => ipcRenderer.invoke('tts:generate', params),
   generateMultiTTS: (params: MultiTTSParams) => ipcRenderer.invoke('tts:generate-multi', params),
+  cancelTTS: () => ipcRenderer.invoke('tts:cancel'),
   onTTSChunk: (callback: (chunk: ArrayBuffer) => void) => {
     ipcRenderer.on('tts:chunk', (_event, chunk) => callback(chunk));
   },
   onTTSComplete: (callback: () => void) => {
     ipcRenderer.on('tts:complete', () => callback());
+  },
+  onTTSCancelled: (callback: () => void) => {
+    ipcRenderer.on('tts:cancelled', () => callback());
   },
   onTTSError: (callback: (error: string) => void) => {
     ipcRenderer.on('tts:error', (_event, error) => callback(error));
@@ -60,6 +66,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   removeAllListeners: () => {
     ipcRenderer.removeAllListeners('tts:chunk');
     ipcRenderer.removeAllListeners('tts:complete');
+    ipcRenderer.removeAllListeners('tts:cancelled');
     ipcRenderer.removeAllListeners('tts:error');
   },
   // Voice management

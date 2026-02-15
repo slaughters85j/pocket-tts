@@ -7,12 +7,10 @@ currencies, etc. into speakable words for TTS consumption.
 
 import time
 
-import pytest
-
 from pocket_tts.text_normalizer import normalize_text
 
-
 # ── Units ──────────────────────────────────────────────────────────────
+
 
 class TestUnits:
     def test_decimal_with_unit(self):
@@ -115,6 +113,7 @@ class TestUnits:
 
 # ── Abbreviations ──────────────────────────────────────────────────────
 
+
 class TestAbbreviations:
     def test_title_abbreviation(self):
         result = normalize_text("Dr. Smith")
@@ -152,6 +151,7 @@ class TestAbbreviations:
 
 # ── Numbers ────────────────────────────────────────────────────────────
 
+
 class TestNumbers:
     def test_integer(self):
         result = normalize_text("There are 42 items.")
@@ -172,6 +172,7 @@ class TestNumbers:
 
 # ── Ordinals ───────────────────────────────────────────────────────────
 
+
 class TestOrdinals:
     def test_first(self):
         result = normalize_text("He came in 1st place.")
@@ -191,6 +192,7 @@ class TestOrdinals:
 
 
 # ── Currency ───────────────────────────────────────────────────────────
+
 
 class TestCurrency:
     def test_dollars(self):
@@ -218,6 +220,7 @@ class TestCurrency:
 
 # ── Percentages ────────────────────────────────────────────────────────
 
+
 class TestPercentages:
     def test_integer_percent(self):
         result = normalize_text("50% complete.")
@@ -229,6 +232,7 @@ class TestPercentages:
 
 
 # ── Time ───────────────────────────────────────────────────────────────
+
 
 class TestTime:
     def test_time_on_the_hour(self):
@@ -246,6 +250,7 @@ class TestTime:
 
 # ── Fractions ──────────────────────────────────────────────────────────
 
+
 class TestFractions:
     def test_common_half(self):
         result = normalize_text("about 1/2 done")
@@ -261,6 +266,7 @@ class TestFractions:
 
 
 # ── Acronyms ──────────────────────────────────────────────────────────
+
 
 class TestAcronyms:
     def test_spelled_out(self):
@@ -278,6 +284,7 @@ class TestAcronyms:
 
 
 # ── Symbols ───────────────────────────────────────────────────────────
+
 
 class TestSymbols:
     def test_equals(self):
@@ -308,6 +315,7 @@ class TestSymbols:
 
 # ── Apostrophes (don't) ──────────────────────────────────────────────
 
+
 class TestApostrophes:
     def test_dont_passthrough(self):
         """The normalizer should NOT mangle contractions."""
@@ -321,12 +329,11 @@ class TestApostrophes:
 
 # ── End-to-end mixed input ────────────────────────────────────────────
 
+
 class TestEndToEnd:
     def test_mixed_sentence(self):
         """Realistic TTS input with multiple normalizable elements."""
-        result = normalize_text(
-            "Dr. Smith measured 17.5mm at 3:30 and it cost $42.50."
-        )
+        result = normalize_text("Dr. Smith measured 17.5mm at 3:30 and it cost $42.50.")
         assert "Doctor Smith" in result
         assert "seventeen point five millimeters" in result
         assert "three thirty" in result
@@ -345,6 +352,7 @@ class TestEndToEnd:
 
 
 # ── Performance ───────────────────────────────────────────────────────
+
 
 class TestPerformance:
     def test_latency_under_1ms(self):

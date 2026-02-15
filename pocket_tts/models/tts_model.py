@@ -15,7 +15,6 @@ from torch.nn import functional as F
 from typing_extensions import Self
 
 from pocket_tts.conditioners.base import TokenizedText
-from pocket_tts.text_normalizer import normalize_text
 from pocket_tts.data.audio import audio_read
 from pocket_tts.data.audio_utils import convert_audio
 from pocket_tts.default_parameters import (
@@ -31,6 +30,7 @@ from pocket_tts.modules import mimi_transformer
 from pocket_tts.modules.dummy_quantizer import DummyQuantizer
 from pocket_tts.modules.seanet import SEANetDecoder, SEANetEncoder
 from pocket_tts.modules.stateful_module import increment_steps, init_states
+from pocket_tts.text_normalizer import normalize_text
 from pocket_tts.utils.config import Config, load_config
 from pocket_tts.utils.utils import (
     PREDEFINED_VOICES,
@@ -325,7 +325,12 @@ class TTSModel(nn.Module):
                     module_state["cache"] = expanded_cache
 
     @torch.no_grad
-    def _decode_audio_worker(self, latents_queue: queue.Queue, result_queue: queue.Queue):
+    def _decode_audio_worker(
+        self,
+        latents_queue: queue.Queue,
+        result_queue: queue.Queue,
+        cancel_event: threading.Event | None = None,
+    ):
         """Worker thread function for decoding audio latents from queue with immediate streaming."""
         try:
             audio_chunks = []
@@ -333,6 +338,15 @@ class TTSModel(nn.Module):
             while True:
                 latent = latents_queue.get()
                 if latent is None:
+                    break
+                if cancel_event is not None and cancel_event.is_set():
+                    logger.info("Decoder worker cancelled, draining latents queue")
+                    # Drain remaining latents so generation thread isn't blocked on put()
+                    while not latents_queue.empty():
+                        try:
+                            latents_queue.get_nowait()
+                        except queue.Empty:
+                            break
                     break
                 mimi_decoding_input = latent * self.flow_lm.emb_std + self.flow_lm.emb_mean
                 transposed = mimi_decoding_input.transpose(-1, -2)
@@ -419,6 +433,7 @@ class TTSModel(nn.Module):
         text_to_generate: str,
         frames_after_eos: int | None = None,
         copy_state: bool = True,
+        cancel_event: threading.Event | None = None,
     ):
         """Generate audio streaming chunks from text input.
 
@@ -464,6 +479,9 @@ class TTSModel(nn.Module):
         chunks = split_into_best_sentences(self.flow_lm.conditioner.tokenizer, text_to_generate)
 
         for chunk in chunks:
+            if cancel_event is not None and cancel_event.is_set():
+                logger.info("Generation cancelled between sentence chunks")
+                break
             text_to_generate, frames_after_eos_guess = prepare_text_prompt(chunk)
             frames_after_eos_guess += 2
             yield from self._generate_audio_stream_short_text(
@@ -471,11 +489,17 @@ class TTSModel(nn.Module):
                 text_to_generate=chunk,
                 frames_after_eos=frames_after_eos_guess,
                 copy_state=copy_state,
+                cancel_event=cancel_event,
             )
 
     @torch.no_grad
     def _generate_audio_stream_short_text(
-        self, model_state: dict, text_to_generate: str, frames_after_eos: int, copy_state: bool
+        self,
+        model_state: dict,
+        text_to_generate: str,
+        frames_after_eos: int,
+        copy_state: bool,
+        cancel_event: threading.Event | None = None,
     ):
         if copy_state:
             model_state = copy.deepcopy(model_state)
@@ -489,7 +513,9 @@ class TTSModel(nn.Module):
 
         # Start decoder worker thread
         decoder_thread = threading.Thread(
-            target=self._decode_audio_worker, args=(latents_queue, result_queue), daemon=True
+            target=self._decode_audio_worker,
+            args=(latents_queue, result_queue, cancel_event),
+            daemon=True,
         )
         logger.info("starting timer now!")
         t_generating = time.monotonic()
@@ -502,6 +528,7 @@ class TTSModel(nn.Module):
             frames_after_eos=frames_after_eos,
             latents_queue=latents_queue,
             result_queue=result_queue,
+            cancel_event=cancel_event,
         )
 
         # Stream audio chunks as they become available
@@ -549,6 +576,7 @@ class TTSModel(nn.Module):
         frames_after_eos: int,
         latents_queue: queue.Queue,
         result_queue: queue.Queue,
+        cancel_event: threading.Event | None = None,
     ):
         gen_len_sec = len(text_to_generate.split()) * 1 + 2.0
         max_gen_len = int(gen_len_sec * 12.5)
@@ -562,7 +590,7 @@ class TTSModel(nn.Module):
         def run_generation():
             try:
                 self._autoregressive_generation(
-                    model_state, max_gen_len, frames_after_eos, latents_queue
+                    model_state, max_gen_len, frames_after_eos, latents_queue, cancel_event
                 )
             except Exception as e:
                 logger.error(f"Error in autoregressive generation: {e}")
@@ -578,7 +606,12 @@ class TTSModel(nn.Module):
 
     @torch.no_grad
     def _autoregressive_generation(
-        self, model_state: dict, max_gen_len: int, frames_after_eos: int, latents_queue: queue.Queue
+        self,
+        model_state: dict,
+        max_gen_len: int,
+        frames_after_eos: int,
+        latents_queue: queue.Queue,
+        cancel_event: threading.Event | None = None,
     ):
         backbone_input = torch.full(
             (1, 1, self.flow_lm.ldim),
@@ -589,6 +622,9 @@ class TTSModel(nn.Module):
         steps_times = []
         eos_step = None
         for generation_step in range(max_gen_len):
+            if cancel_event is not None and cancel_event.is_set():
+                logger.info("Generation cancelled at step %d", generation_step)
+                break
             with display_execution_time("Generating latent", print_output=False) as timer:
                 next_latent, is_eos = self._run_flow_lm_and_increment_step(
                     model_state=model_state, backbone_input_latents=backbone_input

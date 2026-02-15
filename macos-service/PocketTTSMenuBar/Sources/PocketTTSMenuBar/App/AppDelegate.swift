@@ -9,6 +9,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var voiceManager: VoiceManager!
     private var serverManager: ServerManager!
     private var restartServiceItem: NSMenuItem?
+    private var stopSpeakingItem: NSMenuItem?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         print("=== AppDelegate.applicationDidFinishLaunching ===")
@@ -143,6 +144,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // Reload voices from disk before menu displays
         voiceManager.reload()
         refreshVoiceSubmenu()
+        updateStopSpeakingItem()
     }
     
     func menuWillOpen(_ menu: NSMenu) {
@@ -247,6 +249,19 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let selectVoiceItem = NSMenuItem(title: "Select Voice", action: nil, keyEquivalent: "")
         selectVoiceItem.submenu = voiceMenu
         self.menu.addItem(selectVoiceItem)
+
+        self.menu.addItem(NSMenuItem.separator())
+
+        // Stop Speaking
+        let stopItem = NSMenuItem(
+            title: "Stop Speaking",
+            action: #selector(stopSpeaking),
+            keyEquivalent: ""
+        )
+        stopItem.target = self
+        stopItem.isEnabled = isQuickActionRunning()
+        self.stopSpeakingItem = stopItem
+        self.menu.addItem(stopItem)
 
         self.menu.addItem(NSMenuItem.separator())
 
@@ -447,6 +462,54 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         NSApplication.shared.terminate(nil)
     }
 
+    // MARK: - Stop Speaking
+
+    /// PID file path matching PocketTTSQuickAction's pidFilePath
+    private var pidFilePath: URL {
+        Constants.appSupportDirectory.appendingPathComponent(".tts-pid")
+    }
+
+    /// Check if a Quick Action process is currently running
+    private func isQuickActionRunning() -> Bool {
+        guard let pidString = try? String(contentsOf: pidFilePath, encoding: .utf8),
+              let pid = pid_t(pidString.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+            return false
+        }
+        // kill(pid, 0) checks if process exists without actually sending a signal
+        return kill(pid, 0) == 0
+    }
+
+    /// Update the Stop Speaking menu item's enabled state
+    @MainActor
+    private func updateStopSpeakingItem() {
+        stopSpeakingItem?.isEnabled = isQuickActionRunning()
+    }
+
+    @objc private func stopSpeaking() {
+        guard let pidString = try? String(contentsOf: pidFilePath, encoding: .utf8),
+              let pid = pid_t(pidString.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+            print("No TTS PID file found")
+            return
+        }
+
+        // Send SIGTERM for graceful shutdown
+        let result = kill(pid, SIGTERM)
+        if result == 0 {
+            print("Sent SIGTERM to Quick Action process (PID: \(pid))")
+            // Clean up PID file (the process will also try to clean it up)
+            try? FileManager.default.removeItem(at: pidFilePath)
+        } else {
+            print("Failed to send SIGTERM to PID \(pid): errno=\(errno)")
+            // PID file might be stale, clean it up
+            try? FileManager.default.removeItem(at: pidFilePath)
+        }
+
+        // Update menu to reflect the stopped state
+        Task { @MainActor in
+            updateStopSpeakingItem()
+        }
+    }
+
     private func showErrorAlert(_ message: String) {
         let alert = NSAlert()
         alert.messageText = "Pocket TTS"
@@ -455,7 +518,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         alert.addButton(withTitle: "OK")
         alert.runModal()
     }
-    
+
     deinit {
         print("⚠️⚠️⚠️ AppDelegate DEINITIALIZED! This should NOT happen while app is running! ⚠️⚠️⚠️")
     }

@@ -8,8 +8,8 @@ Runs in microseconds on typical input lengths.
 """
 
 import re
-from num2words import num2words
 
+from num2words import num2words
 
 # --- Unit expansion ---
 
@@ -192,36 +192,72 @@ def _expand_number_with_unit(match: re.Match) -> str:
 # Only includes multi-character units that are unambiguous as standalone words.
 # Single-char units (m, v, w, g, l) are excluded — too many false positives.
 _STANDALONE_UNITS: dict[str, str] = {
-    "kg": "kilograms", "km": "kilometers", "mm": "millimeters",
-    "cm": "centimeters", "nm": "nanometers", "um": "micrometers",
-    "mg": "milligrams", "lb": "pounds", "lbs": "pounds", "oz": "ounces",
-    "ml": "milliliters", "gal": "gallons",
-    "mph": "miles per hour", "kph": "kilometers per hour",
-    "fps": "feet per second", "mps": "meters per second",
-    "kb": "kilobits", "mb": "megabits", "gb": "gigabits", "tb": "terabits",
-    "kbps": "kilobits per second", "mbps": "megabits per second",
+    "kg": "kilograms",
+    "km": "kilometers",
+    "mm": "millimeters",
+    "cm": "centimeters",
+    "nm": "nanometers",
+    "um": "micrometers",
+    "mg": "milligrams",
+    "lb": "pounds",
+    "lbs": "pounds",
+    "oz": "ounces",
+    "ml": "milliliters",
+    "gal": "gallons",
+    "mph": "miles per hour",
+    "kph": "kilometers per hour",
+    "fps": "feet per second",
+    "mps": "meters per second",
+    "kb": "kilobits",
+    "mb": "megabits",
+    "gb": "gigabits",
+    "tb": "terabits",
+    "kbps": "kilobits per second",
+    "mbps": "megabits per second",
     "gbps": "gigabits per second",
-    "ms": "milliseconds", "ns": "nanoseconds",
-    "hz": "hertz", "khz": "kilohertz", "mhz": "megahertz", "ghz": "gigahertz",
-    "kw": "kilowatts", "mw": "megawatts", "kv": "kilovolts", "gw": "gigawatts",
-    "ma": "milliamps", "db": "decibels",
-    "rpm": "revolutions per minute", "psi": "pounds per square inch",
-    "sqft": "square feet", "sqm": "square meters",
+    "ms": "milliseconds",
+    "ns": "nanoseconds",
+    "hz": "hertz",
+    "khz": "kilohertz",
+    "mhz": "megahertz",
+    "ghz": "gigahertz",
+    "kw": "kilowatts",
+    "mw": "megawatts",
+    "kv": "kilovolts",
+    "gw": "gigawatts",
+    "ma": "milliamps",
+    "db": "decibels",
+    "rpm": "revolutions per minute",
+    "psi": "pounds per square inch",
+    "sqft": "square feet",
+    "sqm": "square meters",
     # Decibel variants
-    "dbm": "decibel-milliwatts", "dbi": "decibel isotropic",
-    "dbw": "decibel-watts", "dbsm": "decibel square meters",
-    "dbc": "decibel relative to carrier", "dbd": "decibel relative to dipole",
-    "dbr": "decibel relative", "dbhz": "decibel-hertz",
+    "dbm": "decibel-milliwatts",
+    "dbi": "decibel isotropic",
+    "dbw": "decibel-watts",
+    "dbsm": "decibel square meters",
+    "dbc": "decibel relative to carrier",
+    "dbd": "decibel relative to dipole",
+    "dbr": "decibel relative",
+    "dbhz": "decibel-hertz",
     "dbuv": "decibel-microvolts",
     # Pressure
-    "hpa": "hectopascals", "kpa": "kilopascals", "mpa": "megapascals",
-    "mbar": "millibar", "atm": "atmospheres", "torr": "torr",
-    "mmhg": "millimeters of mercury", "inhg": "inches of mercury",
+    "hpa": "hectopascals",
+    "kpa": "kilopascals",
+    "mpa": "megapascals",
+    "mbar": "millibar",
+    "atm": "atmospheres",
+    "torr": "torr",
+    "mmhg": "millimeters of mercury",
+    "inhg": "inches of mercury",
     # Concentration
-    "ppm": "parts per million", "ppb": "parts per billion",
-    "ppt": "parts per trillion", "ppq": "parts per quadrillion",
+    "ppm": "parts per million",
+    "ppb": "parts per billion",
+    "ppt": "parts per trillion",
+    "ppq": "parts per quadrillion",
     # Distance (extended)
-    "nmi": "nautical miles", "mrad": "milliradians",
+    "nmi": "nautical miles",
+    "mrad": "milliradians",
 }
 
 _STANDALONE_KEYS_SORTED = sorted(_STANDALONE_UNITS.keys(), key=len, reverse=True)
@@ -294,8 +330,7 @@ _ABBREVIATIONS = {
 
 # Build case-insensitive abbreviation pattern
 _ABBREV_PATTERN = re.compile(
-    r"\b(" + "|".join(re.escape(a) for a in _ABBREVIATIONS.keys()) + r")",
-    re.IGNORECASE,
+    r"\b(" + "|".join(re.escape(a) for a in _ABBREVIATIONS.keys()) + r")", re.IGNORECASE
 )
 
 
@@ -322,16 +357,11 @@ _ORDINAL_PATTERN = re.compile(r"\b(\d+)(st|nd|rd|th)\b", re.IGNORECASE)
 # Currency: $100, $3.50, €50, £20
 _CURRENCY_PATTERN = re.compile(r"([$€£])(\d+(?:\.\d{1,2})?)")
 
-_CURRENCY_NAMES = {
-    "$": ("dollar", "dollars"),
-    "€": ("euro", "euros"),
-    "£": ("pound", "pounds"),
-}
+_CURRENCY_NAMES = {"$": ("dollar", "dollars"), "€": ("euro", "euros"), "£": ("pound", "pounds")}
 
 # Currency with magnitude words: $3.5 billion, €12 million, £200 thousand
 _CURRENCY_MAGNITUDE_PATTERN = re.compile(
-    r"([$€£])(\d+(?:\.\d+)?)\s*(billion|million|trillion|thousand)\b",
-    re.IGNORECASE,
+    r"([$€£])(\d+(?:\.\d+)?)\s*(billion|million|trillion|thousand)\b", re.IGNORECASE
 )
 
 
@@ -342,6 +372,7 @@ def _expand_currency_magnitude(match: re.Match) -> str:
     _, plural = _CURRENCY_NAMES.get(symbol, ("unit", "units"))
     number_words = _number_to_words(number_str)
     return f"{number_words} {magnitude} {plural}"
+
 
 # Percentage: 50%, 3.5%
 _PERCENT_PATTERN = re.compile(r"(\d+(?:\.\d+)?)%")
@@ -454,9 +485,17 @@ _ACRONYM_PATTERN = re.compile(r"\b([A-Z]{2,5})\b")
 
 _SPOKEN_ACRONYMS = {
     # Pronounceable - leave as-is (model handles these)
-    "NASA", "NATO", "ASAP", "LASER", "RADAR", "SCUBA",
+    "NASA",
+    "NATO",
+    "ASAP",
+    "LASER",
+    "RADAR",
+    "SCUBA",
     # ISR / Remote Sensing / Defense
-    "LIDAR", "SONAR", "FLIR", "NADIR",
+    "LIDAR",
+    "SONAR",
+    "FLIR",
+    "NADIR",
     # Common words that happen to be all-caps
     "OK",
 }
@@ -553,6 +592,23 @@ _ISR_TERMS: dict[str, str] = {
     "COTS": "cots",
     "SWaP": "swap",
     "SWAP": "swap",
+    # RF / microwave spectral bands (IEEE designation)
+    "HF": "H.F.",
+    "VHF": "V.H.F.",
+    "UHF": "U.H.F.",
+    "L-band": "L band",
+    "S-band": "S band",
+    "C-band": "C band",
+    "X-band": "X band",
+    "Ku-band": "K.U. band",
+    "K-band": "K band",
+    "Ka-band": "kay-ay band",
+    "V-band": "V band",
+    "W-band": "W band",
+    "Q-band": "Q band",
+    "E-band": "E band",
+    "D-band": "D band",
+    "G-band": "G band",
     # --- Systems engineering ---
     "SE": "S.E.",
     "MBSE": "M.B.S.E.",
@@ -783,7 +839,9 @@ _ISR_TERMS: dict[str, str] = {
 }
 
 _ISR_PATTERN = re.compile(
-    r"\b(" + "|".join(re.escape(t) for t in sorted(_ISR_TERMS.keys(), key=len, reverse=True)) + r")\b"
+    r"\b("
+    + "|".join(re.escape(t) for t in sorted(_ISR_TERMS.keys(), key=len, reverse=True))
+    + r")\b"
 )
 
 
@@ -793,13 +851,7 @@ def _expand_isr_term(match: re.Match) -> str:
 
 # --- Symbol expansion ---
 
-_SYMBOLS: dict[str, str] = {
-    "=": "equals",
-    "+": "plus",
-    "&": "and",
-    "@": "at",
-    "#": "number",
-}
+_SYMBOLS: dict[str, str] = {"=": "equals", "+": "plus", "&": "and", "@": "at", "#": "number"}
 
 _SYMBOL_PATTERN = re.compile(
     r"(?<!\w)(" + "|".join(re.escape(s) for s in _SYMBOLS.keys()) + r")(?!\w)"
@@ -811,6 +863,7 @@ def _expand_symbol(match: re.Match) -> str:
 
 
 # --- Main normalize function ---
+
 
 def normalize_text(text: str) -> str:
     """

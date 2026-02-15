@@ -18,6 +18,7 @@ export class StreamingWavPlayer {
   private firstAudioPlayed: boolean = false;
   private events: StreamingWavPlayerEvents;
   private allChunks: Uint8Array[] = [];
+  private stopped: boolean = false;
 
   constructor(events: StreamingWavPlayerEvents = {}) {
     this.audioContext = new AudioContext();
@@ -51,6 +52,7 @@ export class StreamingWavPlayer {
   }
 
   private async tryPlayBuffer(): Promise<void> {
+    if (this.stopped) return;
     if (!this.headerParsed || this.pcmData.length < this.minBufferSize) {
       return;
     }
@@ -106,6 +108,8 @@ export class StreamingWavPlayer {
   }
 
   addChunk(chunk: Uint8Array): void {
+    if (this.stopped) return;
+
     this.allChunks.push(new Uint8Array(chunk));
 
     if (!this.headerParsed) {
@@ -131,11 +135,30 @@ export class StreamingWavPlayer {
   }
 
   async flushRemaining(): Promise<void> {
+    if (this.stopped) return;
     if (this.pcmData.length > 0 && this.headerParsed) {
       this.minBufferSize = 0;
       await this.tryPlayBuffer();
     }
-    this.events.onComplete?.();
+
+    // Don't fire onComplete until all scheduled audio has actually played.
+    // The HTTP stream often finishes well before playback does (e.g. 1s generation → 8s audio).
+    // Poll audioContext.currentTime which correctly freezes when paused (suspended).
+    this.waitForPlaybackEnd();
+  }
+
+  /** Polls until all scheduled AudioBufferSourceNodes have finished playing. */
+  private waitForPlaybackEnd(): void {
+    if (this.stopped) return;
+
+    const remaining = this.nextStartTime - this.audioContext.currentTime;
+    if (remaining <= 0.05) {
+      // All buffers have played (50ms tolerance for scheduling jitter)
+      this.events.onComplete?.();
+    } else {
+      // Re-check at reasonable intervals. Cap at 200ms so stop() is responsive.
+      setTimeout(() => this.waitForPlaybackEnd(), Math.min(remaining * 1000, 200));
+    }
   }
 
   getAudioBlob(): Blob {
@@ -160,9 +183,39 @@ export class StreamingWavPlayer {
     return new Blob([combined], { type: 'audio/wav' });
   }
 
+  /** Pause audio playback. Data continues to buffer via addChunk(). */
+  async pause(): Promise<void> {
+    if (this.stopped) return;
+    if (this.audioContext.state === 'running') {
+      await this.audioContext.suspend();
+    }
+  }
+
+  /** Resume audio playback after pause. Flushes any data buffered while paused. */
+  async resume(): Promise<void> {
+    if (this.stopped) return;
+    if (this.audioContext.state === 'suspended') {
+      await this.audioContext.resume();
+      // Play any data that accumulated while paused
+      this.tryPlayBuffer();
+    }
+  }
+
+  /** Whether audio is currently paused. */
+  get isPaused(): boolean {
+    return !this.stopped && this.audioContext.state === 'suspended';
+  }
+
+  /** Stop playback permanently and release resources. */
   stop(): void {
-    this.audioContext.close();
+    this.stopped = true;
     this.isPlaying = false;
+    this.audioContext.close();
+  }
+
+  /** Whether stop() has been called. */
+  get isStopped(): boolean {
+    return this.stopped;
   }
 
   getSampleRate(): number {

@@ -127,11 +127,14 @@ if [ ! -f "$BUILD_PATH" ]; then
     exit 1
 fi
 
+print_info "Signing binary with ad-hoc codesign (required for Automator Quick Actions)..."
+codesign --force --sign - "$BUILD_PATH"
+
 print_info "Installing to /usr/local/bin/pocket-tts-quick-action..."
 sudo mkdir -p /usr/local/bin
 sudo cp "$BUILD_PATH" /usr/local/bin/pocket-tts-quick-action
 sudo chmod +x /usr/local/bin/pocket-tts-quick-action
-print_success "CLI installed to /usr/local/bin/pocket-tts-quick-action"
+print_success "CLI installed and signed at /usr/local/bin/pocket-tts-quick-action"
 
 # Step 5: Install Quick Action Workflow
 print_header "Step 5: Installing Quick Action Workflow"

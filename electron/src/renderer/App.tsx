@@ -11,7 +11,7 @@ import { History, HistoryEntry, addToHistory } from './components/History';
 import { StreamingWavPlayer } from './lib/streaming-wav-player';
 import './types/electron.d.ts';
 
-export type GenerationStatus = 'idle' | 'generating' | 'streaming' | 'complete' | 'error';
+export type GenerationStatus = 'idle' | 'generating' | 'streaming' | 'complete' | 'error' | 'cancelled';
 
 type TabType = 'single' | 'multi' | 'history';
 
@@ -38,6 +38,8 @@ export default function App() {
   const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
   const [savedVoices, setSavedVoices] = useState<SavedVoice[]>([]);
   const [showSaveVoiceModal, setShowSaveVoiceModal] = useState(false);
+
+  const [isPaused, setIsPaused] = useState(false);
 
   const playerRef = useRef<StreamingWavPlayer | null>(null);
   const startTimeRef = useRef<number>(0);
@@ -66,6 +68,7 @@ export default function App() {
       error: null,
     });
     setAudioBlob(null);
+    setIsPaused(false);
     playerRef.current?.stop();
 
     startTimeRef.current = performance.now();
@@ -135,6 +138,16 @@ export default function App() {
       }));
     });
 
+    window.electronAPI.onTTSCancelled(() => {
+      setGenerationState((prev) => ({
+        ...prev,
+        status: 'cancelled',
+      }));
+      if (playerRef.current) {
+        setAudioBlob(playerRef.current.getAudioBlob());
+      }
+    });
+
     // Prepare TTS parameters
     let voiceFile: ArrayBuffer | undefined;
     let voiceUrl: string | undefined;
@@ -164,6 +177,29 @@ export default function App() {
       }));
     }
   }, [text, selectedVoice, customAudioFile, savedVoices]);
+
+  const handleStop = useCallback(() => {
+    playerRef.current?.stop();
+    window.electronAPI?.cancelTTS();
+    setIsPaused(false);
+    if (playerRef.current) {
+      setAudioBlob(playerRef.current.getAudioBlob());
+    }
+    setGenerationState((prev) => ({
+      ...prev,
+      status: 'cancelled',
+    }));
+  }, []);
+
+  const handlePause = useCallback(() => {
+    playerRef.current?.pause();
+    setIsPaused(true);
+  }, []);
+
+  const handleResume = useCallback(() => {
+    playerRef.current?.resume();
+    setIsPaused(false);
+  }, []);
 
   const handleVoiceChange = useCallback((voice: string) => {
     setSelectedVoice(voice);
@@ -315,11 +351,15 @@ export default function App() {
           />
         </div>
 
-        {/* Synthesize Button */}
+        {/* Synthesize / Playback Controls */}
         <div className="mb-6">
           <SynthesizeButton
             onClick={handleGenerate}
-            isGenerating={isGenerating}
+            onStop={handleStop}
+            onPause={handlePause}
+            onResume={handleResume}
+            status={generationState.status}
+            isPaused={isPaused}
             disabled={!text.trim()}
           />
         </div>
@@ -330,6 +370,7 @@ export default function App() {
           timeToFirstAudio={generationState.timeToFirstAudio}
           totalTime={generationState.totalTime}
           error={generationState.error}
+          isPaused={isPaused}
         />
 
         {/* Audio Player */}

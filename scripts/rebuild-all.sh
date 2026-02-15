@@ -53,10 +53,40 @@ echo "Project root: $PROJECT_ROOT"
 
 FAILED_STEPS=()
 
+# ─── Per-component status tracking for summary checklist ─────────────────────
+STATUS_PYTHON="pending"
+STATUS_ELECTRON="skipped"
+STATUS_QUICK_ACTION="skipped"
+STATUS_MENUBAR="skipped"
+STATUS_LAUNCHAGENT="skipped"
+STATUS_APP_INSTALL="skipped"
+
 # ─── Helper: scrub conda/miniforge from PATH so Swift linker isn't poisoned ──
 clean_path_for_swift() {
     echo "$PATH" | tr ':' '\n' | grep -iv 'conda\|miniforge' | paste -sd ':' -
 }
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Step 0: Sync version from pyproject.toml → electron/package.json
+#         (pyproject.toml is the single source of truth for the app version)
+# ═══════════════════════════════════════════════════════════════════════════════
+hdr "Step 0: Version sync"
+
+cd "$PROJECT_ROOT"
+APP_VERSION=$(grep '^version' pyproject.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+echo "  Version from pyproject.toml: $APP_VERSION"
+
+# Sync into electron/package.json
+ELECTRON_PKG="$PROJECT_ROOT/electron/package.json"
+if [ -f "$ELECTRON_PKG" ]; then
+    OLD_ELECTRON_VER=$(grep '"version"' "$ELECTRON_PKG" | head -1 | sed 's/.*"\([0-9][^"]*\)".*/\1/')
+    if [ "$OLD_ELECTRON_VER" != "$APP_VERSION" ]; then
+        sed -i '' "s/\"version\": \"$OLD_ELECTRON_VER\"/\"version\": \"$APP_VERSION\"/" "$ELECTRON_PKG"
+        ok "electron/package.json: $OLD_ELECTRON_VER → $APP_VERSION"
+    else
+        ok "electron/package.json already at $APP_VERSION"
+    fi
+fi
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Step 1: Python package  (everything else depends on this)
@@ -66,9 +96,11 @@ hdr "Step 1/4: Python editable install"
 cd "$PROJECT_ROOT"
 if uv pip install -e . 2>&1; then
     ok "Python package installed (editable)"
+    STATUS_PYTHON="done"
 else
     err "Python editable install failed"
     FAILED_STEPS+=("Python install")
+    STATUS_PYTHON="failed"
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -115,9 +147,26 @@ else
         cd "$ELECTRON_DIR"
         if npm run build:electron 2>&1; then
             ok "Electron build complete (output in electron/release/)"
+            STATUS_ELECTRON="done"
         else
             err "Electron build failed"
             FAILED_STEPS+=("Electron build")
+            STATUS_ELECTRON="failed"
+        fi
+
+        # 2d. Copy .app to /Applications
+        APP_BUNDLE=$(find "$ELECTRON_DIR/release" -maxdepth 2 -name "Pocket TTS.app" -type d 2>/dev/null | head -n 1)
+        if [ -n "$APP_BUNDLE" ]; then
+            echo "  Installing Pocket TTS.app to /Applications..."
+            if [ -d "/Applications/Pocket TTS.app" ]; then
+                rm -rf "/Applications/Pocket TTS.app"
+            fi
+            cp -R "$APP_BUNDLE" "/Applications/Pocket TTS.app"
+            ok "Pocket TTS.app → /Applications/"
+            STATUS_APP_INSTALL="done"
+        else
+            warn "Pocket TTS.app not found in electron/release/ — skipping /Applications install"
+            STATUS_APP_INSTALL="failed"
         fi
     fi
 fi
@@ -143,22 +192,27 @@ else
         cd "$MACOS_DIR/PocketTTSQuickAction"
         if PATH="$CLEAN_PATH" swift build -c release 2>&1; then
             ok "Quick Action CLI built"
+            STATUS_QUICK_ACTION="done"
         else
             err "Quick Action CLI build failed"
             FAILED_STEPS+=("Quick Action build")
+            STATUS_QUICK_ACTION="failed"
         fi
 
-        # 3b. Install CLI binary
+        # 3b. Sign and install CLI binary
         BINARY_PATH="$MACOS_DIR/PocketTTSQuickAction/.build/release/pocket-tts-quick-action"
         if [ -f "$BINARY_PATH" ]; then
+            echo "  Signing binary with ad-hoc codesign (required for Automator Quick Actions)..."
+            codesign --force --sign - "$BINARY_PATH"
             echo "  Installing CLI to /usr/local/bin (requires sudo)..."
             sudo mkdir -p /usr/local/bin
             sudo cp "$BINARY_PATH" /usr/local/bin/pocket-tts-quick-action
             sudo chmod +x /usr/local/bin/pocket-tts-quick-action
-            ok "CLI installed → /usr/local/bin/pocket-tts-quick-action"
+            ok "CLI signed and installed → /usr/local/bin/pocket-tts-quick-action"
         else
             err "Built binary not found at $BINARY_PATH"
             FAILED_STEPS+=("Quick Action install")
+            STATUS_QUICK_ACTION="failed"
         fi
 
         # 3c. Install Automator workflow
@@ -183,9 +237,11 @@ else
         cd "$MACOS_DIR/PocketTTSMenuBar"
         if PATH="$CLEAN_PATH" swift build -c debug 2>&1; then
             ok "Menu Bar App built"
+            STATUS_MENUBAR="done"
         else
             err "Menu Bar App build failed"
             FAILED_STEPS+=("Menu Bar App build")
+            STATUS_MENUBAR="failed"
         fi
     fi
 fi
@@ -202,26 +258,45 @@ else
     if launchctl list 2>/dev/null | grep -q "$PLIST_LABEL"; then
         echo "  Restarting $PLIST_LABEL..."
         launchctl kickstart -k "gui/$(id -u)/$PLIST_LABEL" 2>/dev/null && \
-            ok "LaunchAgent restarted" || \
-            warn "kickstart failed — try: launchctl unload/load manually"
+            { ok "LaunchAgent restarted"; STATUS_LAUNCHAGENT="done"; } || \
+            { warn "kickstart failed — try: launchctl unload/load manually"; STATUS_LAUNCHAGENT="failed"; }
     else
         warn "LaunchAgent not loaded (run macos-service/scripts/install-service.sh to set it up)"
+        STATUS_LAUNCHAGENT="not loaded"
     fi
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Summary
 # ═══════════════════════════════════════════════════════════════════════════════
+
+# Helper to render a status icon
+status_icon() {
+    case "$1" in
+        done)       echo -e "${GREEN}✓${NC}" ;;
+        failed)     echo -e "${RED}✗${NC}" ;;
+        skipped)    echo -e "${YELLOW}–${NC}" ;;
+        *)          echo -e "${YELLOW}⚠${NC}" ;;
+    esac
+}
+
 echo ""
-echo -e "${BOLD}────────────────────────────────────${NC}"
+echo -e "${BOLD}════════════════════════════════════════${NC}"
 if [ ${#FAILED_STEPS[@]} -eq 0 ]; then
-    echo -e "${GREEN}${BOLD}All steps completed successfully.${NC}"
+    echo -e "${GREEN}${BOLD}  All steps completed successfully.${NC}"
 else
-    echo -e "${RED}${BOLD}Failures (${#FAILED_STEPS[@]}):${NC}"
-    for step in "${FAILED_STEPS[@]}"; do
-        err "$step"
-    done
-    echo ""
+    echo -e "${RED}${BOLD}  Completed with ${#FAILED_STEPS[@]} failure(s)${NC}"
+fi
+echo -e "${BOLD}════════════════════════════════════════${NC}"
+echo ""
+echo -e "  $(status_icon "$STATUS_PYTHON")  Python package"
+echo -e "  $(status_icon "$STATUS_ELECTRON")  Electron app build"
+echo -e "  $(status_icon "$STATUS_APP_INSTALL")  Pocket TTS.app → /Applications"
+echo -e "  $(status_icon "$STATUS_QUICK_ACTION")  Quick Action CLI"
+echo -e "  $(status_icon "$STATUS_MENUBAR")  Menu Bar App"
+echo -e "  $(status_icon "$STATUS_LAUNCHAGENT")  LaunchAgent"
+echo ""
+
+if [ ${#FAILED_STEPS[@]} -gt 0 ]; then
     exit 1
 fi
-echo ""
