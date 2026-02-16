@@ -42,6 +42,9 @@ export interface ElectronAPI {
   deleteVoice: (id: string) => Promise<void>;
   // Dev tools
   toggleDevTools: () => Promise<void>;
+  // Audio conversion
+  convertToM4a: (wavBuffer: ArrayBuffer) => Promise<ArrayBuffer>;
+  isM4aAvailable: () => Promise<boolean>;
 }
 
 declare global {

@@ -44,6 +44,9 @@ export interface ElectronAPI {
   deleteVoice: (id: string) => Promise<void>;
   // Dev tools
   toggleDevTools: () => Promise<void>;
+  // Audio conversion
+  convertToM4a: (wavBuffer: ArrayBuffer) => Promise<ArrayBuffer>;
+  isM4aAvailable: () => Promise<boolean>;
 }
 
 contextBridge.exposeInMainWorld('electronAPI', {
@@ -76,4 +79,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   deleteVoice: (id: string) => ipcRenderer.invoke('voice:delete', id),
   // Dev tools
   toggleDevTools: () => ipcRenderer.invoke('toggle-devtools'),
+  // Audio conversion
+  convertToM4a: (wavBuffer: ArrayBuffer) => ipcRenderer.invoke('audio:convert-to-m4a', wavBuffer),
+  isM4aAvailable: () => ipcRenderer.invoke('audio:m4a-available'),
 } as ElectronAPI);

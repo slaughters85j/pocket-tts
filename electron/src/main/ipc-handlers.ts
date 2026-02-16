@@ -1,5 +1,8 @@
 import { ipcMain, IpcMainInvokeEvent } from 'electron';
 import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import { execFile } from 'child_process';
 import { PythonServer } from './python-server';
 import type { VoiceManager } from './voice-manager';
 
@@ -220,5 +223,84 @@ export function registerIpcHandlers(
       currentAbortController.abort();
       currentAbortController = null;
     }
+  });
+
+  // Convert WAV to M4A (AAC) using system ffmpeg
+  ipcMain.handle('audio:convert-to-m4a', async (_event: IpcMainInvokeEvent, wavBuffer: ArrayBuffer): Promise<ArrayBuffer> => {
+    const tmpDir = os.tmpdir();
+    const id = Date.now().toString(36);
+    const wavPath = path.join(tmpDir, `pocket-tts-${id}.wav`);
+    const m4aPath = path.join(tmpDir, `pocket-tts-${id}.m4a`);
+
+    try {
+      fs.writeFileSync(wavPath, Buffer.from(wavBuffer));
+
+      await new Promise<void>((resolve, reject) => {
+        // Try ffmpeg first, fall back to macOS afconvert
+        const tryFfmpeg = () => {
+          execFile('ffmpeg', [
+            '-i', wavPath,
+            '-ac', '2',           // stereo output
+            '-c:a', 'aac',
+            '-b:a', '192k',
+            '-y',                  // overwrite
+            m4aPath,
+          ], (err) => {
+            if (err) {
+              // ffmpeg not found — try macOS afconvert
+              if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+                tryAfconvert();
+              } else {
+                reject(new Error(`ffmpeg failed: ${err.message}`));
+              }
+            } else {
+              resolve();
+            }
+          });
+        };
+
+        const tryAfconvert = () => {
+          execFile('afconvert', [
+            '-f', 'm4af',
+            '-d', 'aac',
+            '-b', '192000',
+            '-c', '2',
+            wavPath,
+            m4aPath,
+          ], (err) => {
+            if (err) {
+              reject(new Error(
+                'M4A encoding requires ffmpeg or macOS afconvert. ' +
+                'Install ffmpeg: brew install ffmpeg'
+              ));
+            } else {
+              resolve();
+            }
+          });
+        };
+
+        tryFfmpeg();
+      });
+
+      const m4aBuffer = fs.readFileSync(m4aPath);
+      return m4aBuffer.buffer.slice(m4aBuffer.byteOffset, m4aBuffer.byteOffset + m4aBuffer.byteLength);
+    } finally {
+      // Clean up temp files
+      try { fs.unlinkSync(wavPath); } catch { /* ignore */ }
+      try { fs.unlinkSync(m4aPath); } catch { /* ignore */ }
+    }
+  });
+
+  // Check if M4A encoding is available (ffmpeg or afconvert)
+  ipcMain.handle('audio:m4a-available', async (): Promise<boolean> => {
+    return new Promise((resolve) => {
+      execFile('ffmpeg', ['-version'], (err) => {
+        if (!err) { resolve(true); return; }
+        // Try macOS afconvert as fallback
+        execFile('afconvert', ['--help'], (err2) => {
+          resolve(!err2);
+        });
+      });
+    });
   });
 }

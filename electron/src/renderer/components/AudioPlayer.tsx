@@ -1,8 +1,16 @@
 import React, { useRef, useState, useEffect, useCallback } from 'react';
 
+type AudioFormat = 'wav' | 'mp3' | 'm4a';
+
 interface AudioPlayerProps {
   audioBlob: Blob;
 }
+
+const FORMAT_OPTIONS: { format: AudioFormat; label: string; ext: string }[] = [
+  { format: 'wav', label: 'WAV', ext: '.wav' },
+  { format: 'mp3', label: 'MP3', ext: '.mp3' },
+  { format: 'm4a', label: 'M4A', ext: '.m4a' },
+];
 
 export function AudioPlayer({ audioBlob }: AudioPlayerProps) {
   const audioRef = useRef<HTMLAudioElement>(null);
@@ -10,6 +18,17 @@ export function AudioPlayer({ audioBlob }: AudioPlayerProps) {
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
+  const [showFormatMenu, setShowFormatMenu] = useState(false);
+  const [encoding, setEncoding] = useState<AudioFormat | null>(null);
+  const [m4aAvailable, setM4aAvailable] = useState(true);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  // Check M4A support via IPC (doesn't depend on audio-encoder module)
+  useEffect(() => {
+    window.electronAPI?.isM4aAvailable()
+      .then(setM4aAvailable)
+      .catch(() => setM4aAvailable(false));
+  }, []);
 
   useEffect(() => {
     console.log('[AudioPlayer] Received audio blob:', {
@@ -112,16 +131,61 @@ export function AudioPlayer({ audioBlob }: AudioPlayerProps) {
     setCurrentTime(time);
   }, []);
 
-  const handleDownload = useCallback(() => {
-    if (!audioUrl) return;
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    if (!showFormatMenu) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setShowFormatMenu(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [showFormatMenu]);
 
+  const downloadBlob = useCallback((blob: Blob, filename: string) => {
+    const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = audioUrl;
-    a.download = 'pocket-tts-output.wav';
+    a.href = url;
+    a.download = filename;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
-  }, [audioUrl]);
+    URL.revokeObjectURL(url);
+  }, []);
+
+  const handleDownload = useCallback(async (format: AudioFormat) => {
+    setShowFormatMenu(false);
+    setEncoding(format);
+
+    try {
+      // Lazy-load the encoder module (lamejs is heavy and may fail at import time in some envs)
+      const encoder = await import('../lib/audio-encoder');
+      const filename = `pocket-tts-output`;
+
+      switch (format) {
+        case 'wav': {
+          const outputBlob = await encoder.toStereoWav(audioBlob);
+          downloadBlob(outputBlob, `${filename}.wav`);
+          break;
+        }
+        case 'mp3': {
+          const outputBlob = await encoder.encodeToMp3(audioBlob);
+          downloadBlob(outputBlob, `${filename}.mp3`);
+          break;
+        }
+        case 'm4a': {
+          const outputBlob = await encoder.encodeToM4a(audioBlob);
+          downloadBlob(outputBlob, `${filename}.m4a`);
+          break;
+        }
+      }
+    } catch (error) {
+      console.error(`[AudioPlayer] Failed to encode ${format}:`, error);
+    } finally {
+      setEncoding(null);
+    }
+  }, [audioBlob, downloadBlob]);
 
   const formatTime = (time: number) => {
     if (!isFinite(time)) return '0:00';
@@ -174,17 +238,55 @@ export function AudioPlayer({ audioBlob }: AudioPlayerProps) {
           </div>
         </div>
 
-        {/* Download Button */}
-        <button
-          onClick={handleDownload}
-          className="w-10 h-10 flex items-center justify-center rounded-lg bg-bg-tertiary hover:bg-border-color transition-colors"
-          title="Download audio"
-        >
-          <svg className="w-5 h-5 text-text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-          </svg>
-        </button>
+        {/* Download Button with Format Menu */}
+        <div className="relative" ref={menuRef}>
+          <button
+            onClick={() => setShowFormatMenu((prev) => !prev)}
+            disabled={encoding !== null}
+            className="w-10 h-10 flex items-center justify-center rounded-lg bg-bg-tertiary hover:bg-border-color transition-colors disabled:opacity-50"
+            title="Download audio"
+          >
+            {encoding ? (
+              <svg className="w-5 h-5 text-text-primary animate-spin" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+              </svg>
+            ) : (
+              <svg className="w-5 h-5 text-text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+              </svg>
+            )}
+          </button>
+
+          {showFormatMenu && (
+            <div className="absolute right-0 bottom-full mb-2 bg-bg-tertiary rounded-lg shadow-lg border border-border-color overflow-hidden z-10 min-w-[120px]">
+              {FORMAT_OPTIONS.map(({ format, label }) => {
+                const disabled = format === 'm4a' && !m4aAvailable;
+                return (
+                  <button
+                    key={format}
+                    onClick={() => !disabled && handleDownload(format)}
+                    disabled={disabled}
+                    className="w-full px-4 py-2 text-left text-sm text-text-primary hover:bg-border-color transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-between"
+                  >
+                    <span>{label}</span>
+                    <span className="text-xs text-text-secondary ml-3">
+                      {format === 'wav' ? 'Lossless' : format === 'mp3' ? '192 kbps' : 'AAC'}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
       </div>
+
+      {/* Encoding status */}
+      {encoding && (
+        <div className="mt-2 text-xs text-text-secondary text-center">
+          Encoding {encoding.toUpperCase()}...
+        </div>
+      )}
     </div>
   );
 }
