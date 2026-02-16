@@ -232,11 +232,36 @@ else
             warn "Workflow source not found — skipping"
         fi
 
-        # 3d. Build Menu Bar App (debug)
+        # 3d. Kill running Menu Bar App (so the old binary isn't stale)
+        if pgrep -x "PocketTTSMenuBar" > /dev/null; then
+            echo "  Killing existing PocketTTSMenuBar..."
+            killall PocketTTSMenuBar 2>/dev/null || true
+            sleep 1
+            ok "Menu Bar App terminated"
+        fi
+
+        # 3e. Build Menu Bar App (debug)
         echo "  Building Menu Bar App (swift build -c debug)..."
         cd "$MACOS_DIR/PocketTTSMenuBar"
         if PATH="$CLEAN_PATH" swift build -c debug 2>&1; then
             ok "Menu Bar App built"
+
+            # 3f. Install and relaunch Menu Bar App
+            MENUBAR_BINARY="$MACOS_DIR/PocketTTSMenuBar/.build/debug/PocketTTSMenuBar"
+            if [ -f "$MENUBAR_BINARY" ]; then
+                echo "  Installing Menu Bar App to /usr/local/bin..."
+                sudo cp "$MENUBAR_BINARY" /usr/local/bin/PocketTTSMenuBar
+                sudo chmod +x /usr/local/bin/PocketTTSMenuBar
+                ok "Menu Bar App installed → /usr/local/bin/PocketTTSMenuBar"
+
+                echo "  Launching Menu Bar App..."
+                nohup /usr/local/bin/PocketTTSMenuBar &>/dev/null &
+                disown
+                ok "Menu Bar App launched"
+            else
+                warn "Menu Bar binary not found at $MENUBAR_BINARY — skipping install"
+            fi
+
             STATUS_MENUBAR="done"
         else
             err "Menu Bar App build failed"
