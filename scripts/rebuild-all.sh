@@ -240,23 +240,35 @@ else
             ok "Menu Bar App terminated"
         fi
 
-        # 3e. Build Menu Bar App (debug)
-        echo "  Building Menu Bar App (swift build -c debug)..."
+        # 3e. Clean Menu Bar App build caches (avoids stale DerivedData)
+        echo "  Cleaning Menu Bar App build caches..."
         cd "$MACOS_DIR/PocketTTSMenuBar"
+        rm -rf .build 2>/dev/null || true
+        # Also purge Xcode DerivedData for this project
+        find "$HOME/Library/Developer/Xcode/DerivedData" -maxdepth 1 -name "PocketTTSMenuBar-*" -type d -exec rm -rf {} + 2>/dev/null || true
+        ok "Build caches cleaned"
+
+        # 3f. Build Menu Bar App (debug)
+        echo "  Building Menu Bar App (swift build -c debug)..."
         if PATH="$CLEAN_PATH" swift build -c debug 2>&1; then
             ok "Menu Bar App built"
 
-            # 3f. Install and relaunch Menu Bar App
+            # 3g. Create .app bundle, install, and relaunch Menu Bar App
             MENUBAR_BINARY="$MACOS_DIR/PocketTTSMenuBar/.build/debug/PocketTTSMenuBar"
+            MENUBAR_APP="$HOME/Applications/Pocket TTS Menu Bar.app"
             if [ -f "$MENUBAR_BINARY" ]; then
-                echo "  Installing Menu Bar App to /usr/local/bin..."
-                sudo cp "$MENUBAR_BINARY" /usr/local/bin/PocketTTSMenuBar
-                sudo chmod +x /usr/local/bin/PocketTTSMenuBar
-                ok "Menu Bar App installed → /usr/local/bin/PocketTTSMenuBar"
+                echo "  Creating app bundle..."
+                rm -rf "$MENUBAR_APP"
+                mkdir -p "$MENUBAR_APP/Contents/MacOS"
+                mkdir -p "$MENUBAR_APP/Contents/Resources"
+                cp "$MENUBAR_BINARY" "$MENUBAR_APP/Contents/MacOS/PocketTTSMenuBar"
+                chmod +x "$MENUBAR_APP/Contents/MacOS/PocketTTSMenuBar"
+                cp "$MACOS_DIR/PocketTTSMenuBar/Sources/PocketTTSMenuBar/Resources/Info.plist" \
+                   "$MENUBAR_APP/Contents/"
+                ok "App bundle created → $MENUBAR_APP"
 
                 echo "  Launching Menu Bar App..."
-                nohup /usr/local/bin/PocketTTSMenuBar &>/dev/null &
-                disown
+                open "$MENUBAR_APP"
                 ok "Menu Bar App launched"
             else
                 warn "Menu Bar binary not found at $MENUBAR_BINARY — skipping install"
