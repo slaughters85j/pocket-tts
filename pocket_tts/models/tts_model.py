@@ -258,7 +258,23 @@ class TTSModel(nn.Module):
         )
         return output_embeddings[:, None, :], is_eos
 
+    @staticmethod
+    def _normalize_audio_rms(audio: torch.Tensor, target_db: float = -20.0) -> torch.Tensor:
+        """Normalize audio to a target RMS level in dB (relative to full scale).
+
+        This ensures all voice prompts enter Mimi at a consistent volume,
+        preventing recording-level differences from affecting output loudness
+        while preserving spectral/prosodic characteristics (e.g. yelling vs calm).
+        """
+        rms = audio.square().mean().sqrt()
+        if rms < 1e-8:
+            return audio
+        target_rms = 10 ** (target_db / 20.0)
+        gain = target_rms / rms
+        return (audio * gain).clamp(-1.0, 1.0)
+
     def _encode_audio(self, audio: torch.Tensor) -> torch.Tensor:
+        audio = self._normalize_audio_rms(audio)
         encoded = self.mimi.encode_to_latent(audio)
         latents = encoded.transpose(-1, -2).to(torch.float32)
         conditioning = F.linear(latents, self.flow_lm.speaker_proj_weight)
