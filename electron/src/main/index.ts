@@ -14,7 +14,7 @@ function isDev(): boolean {
 async function createWindow() {
   mainWindow = new BrowserWindow({
     width: 900,
-    height: 750,
+    height: 1150,
     minWidth: 600,
     minHeight: 500,
     backgroundColor: '#1a1a2e',

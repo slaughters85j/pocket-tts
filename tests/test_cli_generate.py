@@ -148,6 +148,24 @@ def test_generate_long_text(tmp_path):
     assert audio.shape[1] > 24000 * 10  # At least 10 second of audio
 
 
+def test_generate_with_pause_markers(tmp_path):
+    """Test generate command with [Xs] pause markers in text."""
+    output_file = tmp_path / "pause_test.wav"
+
+    result = runner.invoke(
+        cli_app, ["generate", "--text", "Hello. [2s] World.", "--output-path", str(output_file)]
+    )
+
+    assert result.exit_code == 0
+    assert output_file.exists()
+
+    audio, sample_rate = audio_read(str(output_file))
+    assert audio.shape[0] == 1  # Mono channel
+    assert sample_rate == 24000
+    # Audio should contain the 2s silence gap plus generated speech on both sides
+    assert audio.shape[1] > 24000 * 2  # At least 2 seconds total
+
+
 def test_generate_multiple_runs(tmp_path):
     """Test multiple consecutive generate commands."""
     for i in range(3):

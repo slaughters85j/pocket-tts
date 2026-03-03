@@ -30,7 +30,7 @@ from pocket_tts.modules import mimi_transformer
 from pocket_tts.modules.dummy_quantizer import DummyQuantizer
 from pocket_tts.modules.seanet import SEANetDecoder, SEANetEncoder
 from pocket_tts.modules.stateful_module import increment_steps, init_states
-from pocket_tts.text_normalizer import normalize_text
+from pocket_tts.text_normalizer import normalize_text, parse_pause_markers
 from pocket_tts.utils.config import Config, load_config
 from pocket_tts.utils.utils import (
     PREDEFINED_VOICES,
@@ -488,25 +488,77 @@ class TTSModel(nn.Module):
             real-time factor (RTF) metrics.
         """
 
-        # This is a very simplistic way of handling long texts. We could do much better
-        # by using teacher forcing, but it would be a bit slower.
-        # TODO: add the teacher forcing method for long texts where we use the audio of one chunk
-        # as conditioning for the next chunk.
-        chunks = split_into_best_sentences(self.flow_lm.conditioner.tokenizer, text_to_generate)
+        # Parse [Xs] pause markers before any text normalization.
+        # Returns a list of str (text segments) and float (pause seconds).
+        segments = parse_pause_markers(text_to_generate)
 
-        for chunk in chunks:
+        # Crossfade duration at pause boundaries to avoid abrupt silence cuts.
+        fade_samples = int(0.08 * self.sample_rate)  # 80ms
+
+        for seg_idx, segment in enumerate(segments):
             if cancel_event is not None and cancel_event.is_set():
-                logger.info("Generation cancelled between sentence chunks")
+                logger.info("Generation cancelled between segments")
                 break
-            text_to_generate, frames_after_eos_guess = prepare_text_prompt(chunk)
-            frames_after_eos_guess += 2
-            yield from self._generate_audio_stream_short_text(
-                model_state=model_state,
-                text_to_generate=chunk,
-                frames_after_eos=frames_after_eos_guess,
-                copy_state=copy_state,
-                cancel_event=cancel_event,
-            )
+
+            if isinstance(segment, float):
+                # Yield silence for the specified duration
+                n_samples = int(segment * self.sample_rate)
+                if n_samples > 0:
+                    yield torch.zeros(n_samples)
+            else:
+                next_is_pause = seg_idx + 1 < len(segments) and isinstance(
+                    segments[seg_idx + 1], float
+                )
+                prev_is_pause = seg_idx > 0 and isinstance(segments[seg_idx - 1], float)
+
+                # Original text generation logic: split into sentences and generate each.
+                # This is a very simplistic way of handling long texts. We could do much
+                # better by using teacher forcing, but it would be a bit slower.
+                # TODO: add teacher forcing for long texts where we use the audio of one
+                # chunk as conditioning for the next chunk.
+                sentence_chunks = split_into_best_sentences(
+                    self.flow_lm.conditioner.tokenizer, segment
+                )
+
+                # Buffer one chunk so we can apply fade-out to the last one.
+                buffered_chunk = None
+                is_first_chunk = True
+
+                for sentence in sentence_chunks:
+                    if cancel_event is not None and cancel_event.is_set():
+                        logger.info("Generation cancelled between sentence chunks")
+                        break
+                    text_to_generate, frames_after_eos_guess = prepare_text_prompt(sentence)
+                    frames_after_eos_guess += 2
+                    for audio_chunk in self._generate_audio_stream_short_text(
+                        model_state=model_state,
+                        text_to_generate=sentence,
+                        frames_after_eos=frames_after_eos_guess,
+                        copy_state=copy_state,
+                        cancel_event=cancel_event,
+                    ):
+                        # Yield the previously buffered chunk (not the last one yet)
+                        if buffered_chunk is not None:
+                            yield buffered_chunk
+
+                        buffered_chunk = audio_chunk
+
+                        # Fade-in the very first chunk after a pause
+                        if is_first_chunk and prev_is_pause:
+                            n = min(fade_samples, buffered_chunk.shape[0])
+                            if n > 0:
+                                buffered_chunk = buffered_chunk.clone()
+                                buffered_chunk[:n] *= torch.linspace(0.0, 1.0, n)
+                        is_first_chunk = False
+
+                # Yield the last buffered chunk, with fade-out if a pause follows
+                if buffered_chunk is not None:
+                    if next_is_pause:
+                        n = min(fade_samples, buffered_chunk.shape[0])
+                        if n > 0:
+                            buffered_chunk = buffered_chunk.clone()
+                            buffered_chunk[-n:] *= torch.linspace(1.0, 0.0, n)
+                    yield buffered_chunk
 
     @torch.no_grad
     def _generate_audio_stream_short_text(

@@ -7,6 +7,7 @@ import { StreamingWavPlayer } from '../lib/streaming-wav-player';
 import { GenerationStatus } from '../App';
 import { PREDEFINED_VOICES, SavedVoice } from './VoiceSelector';
 import { addToHistory } from './History';
+import { PauseModal } from './PauseModal';
 
 interface MultiTalkConfig {
   version: string;
@@ -61,6 +62,7 @@ export function MultiTalk({ pendingConfig, onConfigLoaded }: MultiTalkProps) {
     },
   ]);
   const [script, setScript] = useState('');
+  const [showPauseModal, setShowPauseModal] = useState(false);
   const [savedVoices, setSavedVoices] = useState<SavedVoice[]>([]);
 
   // Load saved voices on mount
@@ -163,6 +165,25 @@ export function MultiTalk({ pendingConfig, onConfigLoaded }: MultiTalkProps) {
     } else {
       // Fallback: append to end with newline
       setScript((prev) => (prev && !prev.endsWith('\n') ? prev + '\n' : prev) + tag);
+    }
+  }, [script]);
+
+  const handleInsertPause = useCallback((duration: number) => {
+    const textarea = scriptTextareaRef.current;
+    const formatted = parseFloat(duration.toFixed(1)).toString();
+    const marker = `[${formatted}s]`;
+
+    if (textarea) {
+      const start = textarea.selectionStart;
+      const end = textarea.selectionEnd;
+      const newScript = script.slice(0, start) + marker + script.slice(end);
+      setScript(newScript);
+      setTimeout(() => {
+        textarea.focus();
+        textarea.setSelectionRange(start + marker.length, start + marker.length);
+      }, 0);
+    } else {
+      setScript((prev) => prev + marker);
     }
   }, [script]);
 
@@ -521,9 +542,21 @@ export function MultiTalk({ pendingConfig, onConfigLoaded }: MultiTalkProps) {
 
       {/* Script Section */}
       <div className="bg-bg-secondary rounded-lg p-4">
-        <label className="block text-sm font-medium text-text-primary mb-3">
-          Script
-        </label>
+        <div className="flex items-center justify-between mb-3">
+          <label className="block text-sm font-medium text-text-primary">
+            Script
+          </label>
+          <button
+            onClick={() => setShowPauseModal(true)}
+            disabled={isGenerating}
+            className={`px-2.5 py-1 text-xs border border-border-color rounded-lg text-text-secondary
+              hover:bg-bg-tertiary hover:text-text-primary transition-colors
+              ${isGenerating ? 'opacity-50 cursor-not-allowed' : ''}`}
+            title="Insert a pause marker"
+          >
+            + Pause
+          </button>
+        </div>
         <textarea
           ref={scriptTextareaRef}
           value={script}
@@ -569,6 +602,13 @@ export function MultiTalk({ pendingConfig, onConfigLoaded }: MultiTalkProps) {
           <AudioPlayer audioBlob={audioBlob} />
         </div>
       )}
+
+      {/* Pause Insert Modal */}
+      <PauseModal
+        isOpen={showPauseModal}
+        onClose={() => setShowPauseModal(false)}
+        onInsert={handleInsertPause}
+      />
     </div>
   );
 }
