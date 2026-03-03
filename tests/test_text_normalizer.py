@@ -7,7 +7,7 @@ currencies, etc. into speakable words for TTS consumption.
 
 import time
 
-from pocket_tts.text_normalizer import normalize_text
+from pocket_tts.text_normalizer import normalize_text, parse_pause_markers
 
 # ── Units ──────────────────────────────────────────────────────────────
 
@@ -375,3 +375,78 @@ class TestPerformance:
         print(f"\nAvg normalization time: {avg_us:.1f} µs per call")
         # Should be well under 1ms (1000µs). Typical is <100µs.
         assert avg_us < 1000, f"Normalization too slow: {avg_us:.1f} µs"
+
+
+# ── Pause markers ────────────────────────────────────────────────────
+
+
+class TestPauseMarkers:
+    def test_no_markers(self):
+        assert parse_pause_markers("Hello world.") == ["Hello world."]
+
+    def test_single_integer(self):
+        result = parse_pause_markers("Hello. [2s] World.")
+        assert len(result) == 3
+        assert result[1] == 2.0
+        assert "Hello" in result[0]
+        assert "World" in result[2]
+
+    def test_single_decimal(self):
+        result = parse_pause_markers("A [0.5s] B")
+        assert any(isinstance(s, float) and s == 0.5 for s in result)
+
+    def test_multiple_markers(self):
+        result = parse_pause_markers("A [1s] B [2s] C")
+        floats = [s for s in result if isinstance(s, float)]
+        strings = [s for s in result if isinstance(s, str)]
+        assert floats == [1.0, 2.0]
+        assert len(strings) == 3
+
+    def test_marker_at_start(self):
+        result = parse_pause_markers("[1s] Hello.")
+        assert result[0] == 1.0
+        assert "Hello" in result[1]
+
+    def test_marker_at_end(self):
+        result = parse_pause_markers("Hello. [1s]")
+        assert "Hello" in result[0]
+        assert result[1] == 1.0
+
+    def test_clamp_to_max(self):
+        result = parse_pause_markers("[20s]")
+        assert result == [10.0]
+
+    def test_zero_duration_omitted(self):
+        result = parse_pause_markers("A [0s] B")
+        floats = [s for s in result if isinstance(s, float)]
+        assert len(floats) == 0
+
+    def test_adjacent_markers(self):
+        result = parse_pause_markers("[1s][2s]")
+        strings = [s for s in result if isinstance(s, str)]
+        assert len(strings) == 0
+        floats = [s for s in result if isinstance(s, float)]
+        assert floats == [1.0, 2.0]
+
+    def test_whitespace_only_segments_omitted(self):
+        result = parse_pause_markers("[1s]   [2s]")
+        strings = [s for s in result if isinstance(s, str)]
+        assert len(strings) == 0
+
+    def test_case_insensitive(self):
+        result = parse_pause_markers("A [2S] B")
+        floats = [s for s in result if isinstance(s, float)]
+        assert floats == [2.0]
+
+    def test_empty_string(self):
+        result = parse_pause_markers("")
+        assert result == [""]
+
+    def test_markers_not_mangled_by_normalize(self):
+        """Markers must be parsed BEFORE normalize_text to avoid number expansion."""
+        segments = parse_pause_markers("Hello [2.5s] world")
+        assert any(isinstance(s, float) and s == 2.5 for s in segments)
+        # Verify text segments can be safely normalized
+        for s in segments:
+            if isinstance(s, str) and s.strip():
+                normalize_text(s)  # Should not raise

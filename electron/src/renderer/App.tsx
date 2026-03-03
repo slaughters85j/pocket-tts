@@ -1,7 +1,8 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { ReferenceAudio } from './components/ReferenceAudio';
 import { VoiceSelector, SavedVoice, PREDEFINED_VOICES } from './components/VoiceSelector';
-import { TextInput } from './components/TextInput';
+import { TextInput, TextInputHandle } from './components/TextInput';
+import { PauseModal } from './components/PauseModal';
 import { SynthesizeButton } from './components/SynthesizeButton';
 import { AudioPlayer } from './components/AudioPlayer';
 import { StatusIndicator } from './components/StatusIndicator';
@@ -38,9 +39,11 @@ export default function App() {
   const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
   const [savedVoices, setSavedVoices] = useState<SavedVoice[]>([]);
   const [showSaveVoiceModal, setShowSaveVoiceModal] = useState(false);
+  const [showPauseModal, setShowPauseModal] = useState(false);
 
   const [isPaused, setIsPaused] = useState(false);
 
+  const textInputRef = useRef<TextInputHandle>(null);
   const playerRef = useRef<StreamingWavPlayer | null>(null);
   const startTimeRef = useRef<number>(0);
   const [pendingMultiConfig, setPendingMultiConfig] = useState<MultiTalkConfig | null>(null);
@@ -238,6 +241,19 @@ export default function App() {
     setSelectedVoice('alba');
   }, []);
 
+  const handleInsertPause = useCallback((duration: number) => {
+    const formatted = parseFloat(duration.toFixed(1)).toString();
+    const marker = `[${formatted}s]`;
+    const start = textInputRef.current?.getSelectionStart() ?? text.length;
+    const end = textInputRef.current?.getSelectionEnd() ?? text.length;
+    const newText = text.slice(0, start) + marker + text.slice(end);
+    setText(newText);
+    setTimeout(() => {
+      textInputRef.current?.focus();
+      textInputRef.current?.setSelectionRange(start + marker.length, start + marker.length);
+    }, 0);
+  }, [text]);
+
   // History reuse handlers
   const handleReuseSingle = useCallback((entry: HistoryEntry) => {
     if (entry.text) setText(entry.text);
@@ -345,9 +361,11 @@ export default function App() {
         {/* Text Input */}
         <div className="mb-6">
           <TextInput
+            ref={textInputRef}
             value={text}
             onChange={setText}
             disabled={isGenerating}
+            onPauseClick={() => setShowPauseModal(true)}
           />
         </div>
 
@@ -405,6 +423,13 @@ export default function App() {
         onClose={() => setShowSaveVoiceModal(false)}
         onSave={handleSaveVoice}
         fileName={customAudioFile?.name ?? 'Unknown'}
+      />
+
+      {/* Pause Insert Modal */}
+      <PauseModal
+        isOpen={showPauseModal}
+        onClose={() => setShowPauseModal(false)}
+        onInsert={handleInsertPause}
       />
     </div>
   );

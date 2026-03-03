@@ -622,7 +622,6 @@ _ISR_TERMS: dict[str, str] = {
     "RTM": "requirements traceability matrix",
     "CONOPS": "con-ops",
     "ICD": "I.C.D.",
-    "SRD": "S.R.D.",
     "SRS": "S.R.S.",
     "SSS": "S.S.S.",
     "MOE": "measure of effectiveness",
@@ -921,3 +920,50 @@ def normalize_text(text: str) -> str:
     text = re.sub(r" {2,}", " ", text)
 
     return text.strip()
+
+
+# --- Pause marker parsing ---
+
+_PAUSE_MARKER_RE = re.compile(r"\[(\d+(?:\.\d+)?)s\]", re.IGNORECASE)
+MAX_PAUSE_SECONDS = 10.0
+
+
+def parse_pause_markers(text: str) -> list[str | float]:
+    """Split text on ``[Xs]`` pause markers into text segments and pause durations.
+
+    Must be called **before** :func:`normalize_text` so the numbers inside
+    markers are not expanded to words.
+
+    Args:
+        text: Input text potentially containing pause markers like ``[2s]``, ``[0.5s]``.
+
+    Returns:
+        List of alternating ``str`` (text segments) and ``float`` (pause seconds).
+        Empty/whitespace text segments are omitted.  Durations are clamped to
+        ``[0, MAX_PAUSE_SECONDS]``; zero-duration pauses are dropped.
+
+    Examples:
+        >>> parse_pause_markers("Hello. [2.0s] World.")
+        ['Hello. ', 2.0, ' World.']
+        >>> parse_pause_markers("No pauses here.")
+        ['No pauses here.']
+    """
+    segments: list[str | float] = []
+    last_end = 0
+
+    for m in _PAUSE_MARKER_RE.finditer(text):
+        before = text[last_end : m.start()]
+        if before.strip():
+            segments.append(before)
+
+        duration = min(float(m.group(1)), MAX_PAUSE_SECONDS)
+        if duration > 0:
+            segments.append(duration)
+
+        last_end = m.end()
+
+    tail = text[last_end:]
+    if tail.strip():
+        segments.append(tail)
+
+    return segments if segments else [text]
