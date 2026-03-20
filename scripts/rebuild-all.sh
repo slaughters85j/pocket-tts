@@ -60,6 +60,7 @@ STATUS_QUICK_ACTION="skipped"
 STATUS_MENUBAR="skipped"
 STATUS_LAUNCHAGENT="skipped"
 STATUS_APP_INSTALL="skipped"
+STATUS_WORKFLOW="skipped"
 
 # ─── Helper: scrub conda/miniforge from PATH so Swift linker isn't poisoned ──
 clean_path_for_swift() {
@@ -187,52 +188,25 @@ else
         # Clean PATH for Swift builds
         CLEAN_PATH="$(clean_path_for_swift)"
 
-        # 3a. Build Quick Action CLI (release)
-        echo "  Building Quick Action CLI (swift build -c release)..."
-        cd "$MACOS_DIR/PocketTTSQuickAction"
-        if PATH="$CLEAN_PATH" swift build -c release 2>&1; then
-            ok "Quick Action CLI built"
-            STATUS_QUICK_ACTION="done"
+        # 3a. Install Python Quick Action (replaces deprecated Swift CLI)
+        echo "  Installing Python Quick Action..."
+        INSTALL_SCRIPT="$MACOS_DIR/scripts/install-quick-action.sh"
+        if [ -x "$INSTALL_SCRIPT" ]; then
+            if bash "$INSTALL_SCRIPT" 2>&1; then
+                ok "Python Quick Action installed"
+                STATUS_QUICK_ACTION="done"
+                STATUS_WORKFLOW="done"
+            else
+                err "Quick Action install failed"
+                FAILED_STEPS+=("Quick Action install")
+                STATUS_QUICK_ACTION="failed"
+            fi
         else
-            err "Quick Action CLI build failed"
-            FAILED_STEPS+=("Quick Action build")
+            warn "install-quick-action.sh not found — skipping"
             STATUS_QUICK_ACTION="failed"
         fi
 
-        # 3b. Sign and install CLI binary
-        BINARY_PATH="$MACOS_DIR/PocketTTSQuickAction/.build/release/pocket-tts-quick-action"
-        if [ -f "$BINARY_PATH" ]; then
-            echo "  Signing binary with ad-hoc codesign (required for Automator Quick Actions)..."
-            codesign --force --sign - "$BINARY_PATH"
-            echo "  Installing CLI to /usr/local/bin (requires sudo)..."
-            sudo mkdir -p /usr/local/bin
-            sudo cp "$BINARY_PATH" /usr/local/bin/pocket-tts-quick-action
-            sudo chmod +x /usr/local/bin/pocket-tts-quick-action
-            ok "CLI signed and installed → /usr/local/bin/pocket-tts-quick-action"
-        else
-            err "Built binary not found at $BINARY_PATH"
-            FAILED_STEPS+=("Quick Action install")
-            STATUS_QUICK_ACTION="failed"
-        fi
-
-        # 3c. Install Automator workflow
-        WORKFLOW_SRC="$MACOS_DIR/quick-actions/Read Selection with Pocket TTS.workflow"
-        WORKFLOW_DST="$HOME/Library/Services/Read Selection with Pocket TTS.workflow"
-        if [ -d "$WORKFLOW_SRC" ]; then
-            echo "  Installing Quick Action workflow..."
-            rm -rf "$WORKFLOW_DST"
-            cp -r "$WORKFLOW_SRC" "$WORKFLOW_DST"
-            ok "Workflow installed → ~/Library/Services/"
-
-            # Refresh macOS Services menu
-            /System/Library/CoreServices/pbs -flush 2>/dev/null || true
-            killall pbs 2>/dev/null || true
-            ok "Services menu refreshed"
-        else
-            warn "Workflow source not found — skipping"
-        fi
-
-        # 3d. Kill running Menu Bar App (so the old binary isn't stale)
+        # 3c. Kill running Menu Bar App (so the old binary isn't stale)
         if pgrep -x "PocketTTSMenuBar" > /dev/null; then
             echo "  Killing existing PocketTTSMenuBar..."
             killall PocketTTSMenuBar 2>/dev/null || true
@@ -240,7 +214,7 @@ else
             ok "Menu Bar App terminated"
         fi
 
-        # 3e. Clean Menu Bar App build caches (avoids stale DerivedData)
+        # 3d. Clean Menu Bar App build caches (avoids stale DerivedData)
         echo "  Cleaning Menu Bar App build caches..."
         cd "$MACOS_DIR/PocketTTSMenuBar"
         rm -rf .build 2>/dev/null || true
@@ -248,12 +222,12 @@ else
         find "$HOME/Library/Developer/Xcode/DerivedData" -maxdepth 1 -name "PocketTTSMenuBar-*" -type d -exec rm -rf {} + 2>/dev/null || true
         ok "Build caches cleaned"
 
-        # 3f. Build Menu Bar App (debug)
+        # 3e. Build Menu Bar App (debug)
         echo "  Building Menu Bar App (swift build -c debug)..."
         if PATH="$CLEAN_PATH" swift build -c debug 2>&1; then
             ok "Menu Bar App built"
 
-            # 3g. Create .app bundle, install, and relaunch Menu Bar App
+            # 3f. Create .app bundle, install, and relaunch Menu Bar App
             MENUBAR_BINARY="$MACOS_DIR/PocketTTSMenuBar/.build/debug/PocketTTSMenuBar"
             MENUBAR_APP="$HOME/Applications/Pocket TTS Menu Bar.app"
             if [ -f "$MENUBAR_BINARY" ]; then
@@ -329,7 +303,8 @@ echo ""
 echo -e "  $(status_icon "$STATUS_PYTHON")  Python package"
 echo -e "  $(status_icon "$STATUS_ELECTRON")  Electron app build"
 echo -e "  $(status_icon "$STATUS_APP_INSTALL")  Pocket TTS.app → /Applications"
-echo -e "  $(status_icon "$STATUS_QUICK_ACTION")  Quick Action CLI"
+echo -e "  $(status_icon "$STATUS_QUICK_ACTION")  Quick Action (Python)"
+echo -e "  $(status_icon "$STATUS_WORKFLOW")  Automator workflow"
 echo -e "  $(status_icon "$STATUS_MENUBAR")  Menu Bar App"
 echo -e "  $(status_icon "$STATUS_LAUNCHAGENT")  LaunchAgent"
 echo ""
