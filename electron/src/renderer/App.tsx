@@ -43,7 +43,7 @@ export default function App() {
   const [showPauseModal, setShowPauseModal] = useState(false);
   const [showEnhancementStudio, setShowEnhancementStudio] = useState(false);
   const [enhancementTargetVoiceId, setEnhancementTargetVoiceId] = useState<string | null>(null);
-  const [enhanceAvailable, setEnhanceAvailable] = useState(false);
+  const [enhanceStatus, setEnhanceStatus] = useState<'ready' | 'needs-setup' | 'unavailable'>('unavailable');
 
   const [isPaused, setIsPaused] = useState(false);
 
@@ -55,7 +55,7 @@ export default function App() {
   // Load saved voices and check enhancement availability on startup
   useEffect(() => {
     window.electronAPI?.getSavedVoices().then(setSavedVoices);
-    window.electronAPI?.isEnhanceAvailable?.().then(setEnhanceAvailable).catch(() => {});
+    window.electronAPI?.isEnhanceAvailable?.().then(setEnhanceStatus).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -378,7 +378,8 @@ export default function App() {
             savedVoices={savedVoices}
             onDeleteSavedVoice={handleDeleteSavedVoice}
             onEnhanceVoice={handleEnhanceVoice}
-            enhanceAvailable={enhanceAvailable}
+            enhanceStatus={enhanceStatus}
+            onEnhanceStatusChange={setEnhanceStatus}
           />
         </div>
 
@@ -447,7 +448,8 @@ export default function App() {
         onClose={() => setShowSaveVoiceModal(false)}
         onSave={handleSaveVoice}
         fileName={customAudioFile?.name ?? 'Unknown'}
-        enhanceAvailable={enhanceAvailable}
+        enhanceStatus={enhanceStatus}
+        onEnhanceStatusChange={setEnhanceStatus}
       />
 
       {/* Enhancement Studio Modal */}

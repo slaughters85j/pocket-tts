@@ -18,17 +18,24 @@ export interface EnhanceResult {
   denoise: boolean;
 }
 
+/** Tri-state: venv ready, script exists but no venv, or completely unavailable */
+export type EnhanceAvailability = 'ready' | 'needs-setup' | 'unavailable';
+
 type ProgressCallback = (status: string, details?: Record<string, unknown>) => void;
 
 /**
  * Manages LavaSR voice enhancement as a sidecar subprocess.
  * Enhancement runs in a separate Python process to avoid blocking
  * the TTS server (which is not thread-safe).
+ *
+ * On first use, bootstraps a dedicated venv at:
+ *   ~/Library/Application Support/pocket-tts-electron/lavasr-venv/
  */
 export class VoiceEnhancer {
   private tempFiles: Set<string> = new Set();
   private currentProcess: ChildProcess | null = null;
   private pendingResult: EnhanceResult | null = null;
+  private setupProcess: ChildProcess | null = null;
 
   /**
    * Get path to the enhance-voice.py script.
@@ -42,49 +49,186 @@ export class VoiceEnhancer {
     return path.join(__dirname, '../../resources/enhance-voice.py');
   }
 
+  /** Path to the self-contained LavaSR venv */
+  private getVenvDir(): string {
+    return path.join(app.getPath('userData'), 'lavasr-venv');
+  }
+
+  /** Path to the Python binary inside the LavaSR venv */
+  private getVenvPython(): string {
+    return path.join(this.getVenvDir(), 'bin', 'python');
+  }
+
   /**
    * Get path to the Python executable.
-   * Uses the LavaSR venv if it exists, otherwise falls back to system uv/python.
+   * Only uses the app's own venv — no external fallbacks.
    */
   private getPythonPath(): string {
-    const userDataPath = app.getPath('userData');
-    const venvPython = path.join(userDataPath, 'lavasr-venv', 'bin', 'python');
+    const venvPython = this.getVenvPython();
     if (fs.existsSync(venvPython)) {
       return venvPython;
     }
-
-    // Fall back to the clawd scripts venv (dev machine)
-    const clawdVenvPython = path.join(
-      os.homedir(),
-      'clawd/scripts/lavasr-enhance/.venv/bin/python'
-    );
-    if (fs.existsSync(clawdVenvPython)) {
-      return clawdVenvPython;
-    }
-
+    // Bare python3 won't have deps, but lets isAvailable() return 'needs-setup'
     return 'python3';
   }
 
   /**
-   * Check if LavaSR enhancement is available.
+   * Resolve the `uv` binary path.
+   * Checks common locations since Electron's PATH may not include ~/.local/bin.
    */
-  async isAvailable(): Promise<boolean> {
+  private getUvPath(): string {
+    const candidates = [
+      path.join(os.homedir(), '.local/bin/uv'),
+      '/usr/local/bin/uv',
+      '/opt/homebrew/bin/uv',
+      'uv', // fall back to PATH
+    ];
+    for (const candidate of candidates) {
+      if (candidate === 'uv') return candidate;
+      if (fs.existsSync(candidate)) return candidate;
+    }
+    return 'uv';
+  }
+
+  /**
+   * Check LavaSR enhancement availability (tri-state).
+   * - 'ready': venv exists and LavaSR imports successfully
+   * - 'needs-setup': enhance script exists but venv is missing or broken
+   * - 'unavailable': enhance script not found (not bundled)
+   */
+  async checkAvailability(): Promise<EnhanceAvailability> {
     const scriptPath = this.getScriptPath();
     if (!fs.existsSync(scriptPath)) {
-      return false;
+      return 'unavailable';
     }
 
-    const pythonPath = this.getPythonPath();
+    const venvPython = this.getVenvPython();
+    if (!fs.existsSync(venvPython)) {
+      return 'needs-setup';
+    }
 
     return new Promise((resolve) => {
       execFile(
-        pythonPath,
+        venvPython,
         ['-c', 'from LavaSR.model import LavaEnhance2; print("ok")'],
-        { timeout: 10000 },
+        { timeout: 15000 },
         (err) => {
-          resolve(!err);
+          resolve(err ? 'needs-setup' : 'ready');
         }
       );
+    });
+  }
+
+  /**
+   * Legacy boolean check — returns true only if fully ready.
+   */
+  async isAvailable(): Promise<boolean> {
+    return (await this.checkAvailability()) === 'ready';
+  }
+
+  /**
+   * Bootstrap the LavaSR venv with all required dependencies.
+   * Creates a venv via `uv`, installs torch + torchaudio (CPU), soundfile, and LavaSR.
+   * Reports progress via callback for UI feedback.
+   *
+   * Idempotent — safe to call if venv already exists (will verify/repair).
+   */
+  async setupVenv(onProgress?: ProgressCallback): Promise<void> {
+    const uvPath = this.getUvPath();
+    const venvDir = this.getVenvDir();
+    const venvPython = this.getVenvPython();
+
+    // Step 1: Create venv if it doesn't exist
+    if (!fs.existsSync(venvPython)) {
+      onProgress?.('creating-venv', { message: 'Creating Python virtual environment...' });
+      await this.runCommand(uvPath, ['venv', venvDir, '--python', '3.12']);
+    }
+
+    // Step 2: Install PyTorch CPU (smaller than full CUDA build)
+    onProgress?.('installing-torch', {
+      message: 'Installing PyTorch (this may take a minute)...',
+    });
+    await this.runCommand(uvPath, [
+      'pip',
+      'install',
+      '--python',
+      venvPython,
+      'torch',
+      'torchaudio',
+      '--index-url',
+      'https://download.pytorch.org/whl/cpu',
+    ]);
+
+    // Step 3: Install soundfile
+    onProgress?.('installing-soundfile', { message: 'Installing soundfile...' });
+    await this.runCommand(uvPath, ['pip', 'install', '--python', venvPython, 'soundfile']);
+
+    // Step 4: Install LavaSR from GitHub
+    onProgress?.('installing-lavasr', {
+      message: 'Installing LavaSR from GitHub...',
+    });
+    await this.runCommand(uvPath, [
+      'pip',
+      'install',
+      '--python',
+      venvPython,
+      'git+https://github.com/ysharma3501/LavaSR.git',
+    ]);
+
+    // Step 5: Verify the install actually works
+    onProgress?.('verifying', { message: 'Verifying LavaSR installation...' });
+    await new Promise<void>((resolve, reject) => {
+      execFile(
+        venvPython,
+        ['-c', 'from LavaSR.model import LavaEnhance2; print("ok")'],
+        { timeout: 15000 },
+        (err, _stdout, stderr) => {
+          if (err) {
+            reject(new Error(`LavaSR verification failed: ${stderr || err.message}`));
+          } else {
+            resolve();
+          }
+        }
+      );
+    });
+
+    onProgress?.('done', { message: 'LavaSR setup complete!' });
+  }
+
+  /**
+   * Cancel an in-progress setup.
+   */
+  cancelSetup(): void {
+    if (this.setupProcess) {
+      this.setupProcess.kill('SIGTERM');
+      this.setupProcess = null;
+    }
+  }
+
+  /**
+   * Run a shell command and return a promise. Stores the child process
+   * in setupProcess so it can be cancelled.
+   */
+  private runCommand(command: string, args: string[]): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const proc = execFile(
+        command,
+        args,
+        {
+          timeout: 600000, // 10 min timeout for large installs
+          maxBuffer: 10 * 1024 * 1024, // 10MB buffer
+          env: { ...process.env, PATH: `${path.dirname(command)}:${process.env.PATH}` },
+        },
+        (error, stdout, stderr) => {
+          this.setupProcess = null;
+          if (error) {
+            reject(new Error(`Command failed: ${command} ${args.join(' ')}\n${stderr || error.message}`));
+          } else {
+            resolve(stdout);
+          }
+        }
+      );
+      this.setupProcess = proc;
     });
   }
 

@@ -65,8 +65,12 @@ export interface ElectronAPI {
   enhancePreview: (params: { voiceId?: string; audioData?: ArrayBuffer; denoise: boolean }) => Promise<{ original: ArrayBuffer; enhanced: ArrayBuffer }>;
   enhanceAccept: (voiceId: string) => Promise<SavedVoice>;
   enhanceReject: () => Promise<void>;
-  isEnhanceAvailable: () => Promise<boolean>;
+  isEnhanceAvailable: () => Promise<'ready' | 'needs-setup' | 'unavailable'>;
   onEnhanceProgress: (callback: (status: string, details?: Record<string, unknown>) => void) => void;
+  // LavaSR venv bootstrap
+  setupEnhance: () => Promise<void>;
+  cancelEnhanceSetup: () => Promise<void>;
+  onSetupProgress: (callback: (status: string, details?: Record<string, unknown>) => void) => void;
   // Audio normalization per-voice
   updateVoiceNormalization: (params: { voiceId: string; rmsTargetDb: number; denoise: boolean }) => Promise<SavedVoice>;
 }
@@ -112,6 +116,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   isEnhanceAvailable: () => ipcRenderer.invoke('voice:enhance-available'),
   onEnhanceProgress: (callback: (status: string, details?: Record<string, unknown>) => void) => {
     ipcRenderer.on('enhance:progress', (_event, status, details) => callback(status, details));
+  },
+  // LavaSR venv bootstrap
+  setupEnhance: () => ipcRenderer.invoke('voice:enhance-setup'),
+  cancelEnhanceSetup: () => ipcRenderer.invoke('voice:enhance-setup-cancel'),
+  onSetupProgress: (callback: (status: string, details?: Record<string, unknown>) => void) => {
+    ipcRenderer.on('enhance:setup-progress', (_event, status, details) => callback(status, details));
   },
   // Audio normalization per-voice
   updateVoiceNormalization: (params: { voiceId: string; rmsTargetDb: number; denoise: boolean }) =>

@@ -325,9 +325,27 @@ export function registerEnhancementHandlers(
     ) => Promise<import('./voice-manager').SavedVoice | null>;
   }
 ) {
-  // Check if LavaSR enhancement is available
-  ipcMain.handle('voice:enhance-available', async (): Promise<boolean> => {
-    return voiceEnhancer.isAvailable();
+  // Check LavaSR enhancement availability (tri-state)
+  ipcMain.handle(
+    'voice:enhance-available',
+    async (): Promise<import('./voice-enhancer').EnhanceAvailability> => {
+      return voiceEnhancer.checkAvailability();
+    }
+  );
+
+  // Bootstrap the LavaSR venv (first-time setup)
+  ipcMain.handle('voice:enhance-setup', async (event: IpcMainInvokeEvent): Promise<void> => {
+    const sender = event.sender;
+    await voiceEnhancer.setupVenv((status, details) => {
+      if (!sender.isDestroyed()) {
+        sender.send('enhance:setup-progress', status, details);
+      }
+    });
+  });
+
+  // Cancel an in-progress setup
+  ipcMain.handle('voice:enhance-setup-cancel', async (): Promise<void> => {
+    voiceEnhancer.cancelSetup();
   });
 
   // Run enhancement and return both original + enhanced audio for A/B preview
