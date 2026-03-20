@@ -7,6 +7,7 @@ import { SynthesizeButton } from './components/SynthesizeButton';
 import { AudioPlayer } from './components/AudioPlayer';
 import { StatusIndicator } from './components/StatusIndicator';
 import { SaveVoiceModal } from './components/SaveVoiceModal';
+import { EnhancementStudio } from './components/EnhancementStudio';
 import { MultiTalk, MultiTalkConfig } from './components/MultiTalk';
 import { History, HistoryEntry, addToHistory } from './components/History';
 import { StreamingWavPlayer } from './lib/streaming-wav-player';
@@ -40,6 +41,9 @@ export default function App() {
   const [savedVoices, setSavedVoices] = useState<SavedVoice[]>([]);
   const [showSaveVoiceModal, setShowSaveVoiceModal] = useState(false);
   const [showPauseModal, setShowPauseModal] = useState(false);
+  const [showEnhancementStudio, setShowEnhancementStudio] = useState(false);
+  const [enhancementTargetVoiceId, setEnhancementTargetVoiceId] = useState<string | null>(null);
+  const [enhanceAvailable, setEnhanceAvailable] = useState(false);
 
   const [isPaused, setIsPaused] = useState(false);
 
@@ -48,9 +52,10 @@ export default function App() {
   const startTimeRef = useRef<number>(0);
   const [pendingMultiConfig, setPendingMultiConfig] = useState<MultiTalkConfig | null>(null);
 
-  // Load saved voices on startup
+  // Load saved voices and check enhancement availability on startup
   useEffect(() => {
     window.electronAPI?.getSavedVoices().then(setSavedVoices);
+    window.electronAPI?.isEnhanceAvailable?.().then(setEnhanceAvailable).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -220,7 +225,7 @@ export default function App() {
     }
   }, []);
 
-  const handleSaveVoice = useCallback(async (name: string, description: string) => {
+  const handleSaveVoice = useCallback(async (name: string, description: string, enhanceAfterSave: boolean) => {
     if (!customAudioFile) return;
 
     const audioData = await customAudioFile.arrayBuffer();
@@ -233,12 +238,29 @@ export default function App() {
     setSavedVoices((prev) => [...prev, savedVoice]);
     setSelectedVoice(`saved:${savedVoice.id}`);
     setCustomAudioFile(null);
+
+    // Open Enhancement Studio if requested
+    if (enhanceAfterSave) {
+      setEnhancementTargetVoiceId(savedVoice.id);
+      setShowEnhancementStudio(true);
+    }
   }, [customAudioFile]);
 
   const handleDeleteSavedVoice = useCallback(async (id: string) => {
     await window.electronAPI.deleteVoice(id);
     setSavedVoices((prev) => prev.filter((v) => v.id !== id));
     setSelectedVoice('alba');
+  }, []);
+
+  const handleEnhanceVoice = useCallback((id: string) => {
+    setEnhancementTargetVoiceId(id);
+    setShowEnhancementStudio(true);
+  }, []);
+
+  const handleEnhancementAccepted = useCallback((updatedVoice: SavedVoice) => {
+    setSavedVoices((prev) =>
+      prev.map((v) => (v.id === updatedVoice.id ? updatedVoice : v))
+    );
   }, []);
 
   const handleInsertPause = useCallback((duration: number) => {
@@ -355,6 +377,8 @@ export default function App() {
             disabled={isGenerating}
             savedVoices={savedVoices}
             onDeleteSavedVoice={handleDeleteSavedVoice}
+            onEnhanceVoice={handleEnhanceVoice}
+            enhanceAvailable={enhanceAvailable}
           />
         </div>
 
@@ -423,6 +447,23 @@ export default function App() {
         onClose={() => setShowSaveVoiceModal(false)}
         onSave={handleSaveVoice}
         fileName={customAudioFile?.name ?? 'Unknown'}
+        enhanceAvailable={enhanceAvailable}
+      />
+
+      {/* Enhancement Studio Modal */}
+      <EnhancementStudio
+        isOpen={showEnhancementStudio}
+        onClose={() => {
+          setShowEnhancementStudio(false);
+          setEnhancementTargetVoiceId(null);
+        }}
+        voiceId={enhancementTargetVoiceId}
+        voiceName={
+          enhancementTargetVoiceId
+            ? savedVoices.find((v) => v.id === enhancementTargetVoiceId)?.name ?? null
+            : null
+        }
+        onAccepted={handleEnhancementAccepted}
       />
 
       {/* Pause Insert Modal */}

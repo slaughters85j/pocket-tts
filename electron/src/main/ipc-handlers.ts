@@ -3,8 +3,9 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { execFile } from 'child_process';
+import { randomUUID } from 'crypto';
 import { PythonServer } from './python-server';
-import type { VoiceManager } from './voice-manager';
+import { VoiceEnhancer } from './voice-enhancer';
 
 interface TTSParams {
   text: string;
@@ -303,4 +304,147 @@ export function registerIpcHandlers(
       });
     });
   });
+}
+
+// ─── Voice Enhancement Handlers ──────────────────────────────────────────────
+
+const voiceEnhancer = new VoiceEnhancer();
+
+export function registerEnhancementHandlers(
+  voiceManager: {
+    getVoiceFilePath: (id: string) => string | null;
+    getVoiceAudioBuffer: (id: string) => Promise<Buffer | null>;
+    replaceVoiceFile: (
+      id: string,
+      newFilePath: string,
+      meta: { denoise: boolean; device: string }
+    ) => Promise<import('./voice-manager').SavedVoice | null>;
+    updateVoiceMetadata: (
+      id: string,
+      updates: Partial<import('./voice-manager').SavedVoice>
+    ) => Promise<import('./voice-manager').SavedVoice | null>;
+  }
+) {
+  // Check if LavaSR enhancement is available
+  ipcMain.handle('voice:enhance-available', async (): Promise<boolean> => {
+    return voiceEnhancer.isAvailable();
+  });
+
+  // Run enhancement and return both original + enhanced audio for A/B preview
+  ipcMain.handle(
+    'voice:enhance-preview',
+    async (
+      event: IpcMainInvokeEvent,
+      params: { voiceId?: string; audioData?: ArrayBuffer; denoise: boolean }
+    ): Promise<{ original: ArrayBuffer; enhanced: ArrayBuffer }> => {
+      const sender = event.sender;
+      let inputPath: string;
+      let tempInputCreated = false;
+
+      if (params.voiceId) {
+        // Enhance an existing saved voice
+        const filePath = voiceManager.getVoiceFilePath(params.voiceId);
+        if (!filePath || !fs.existsSync(filePath)) {
+          throw new Error('Voice file not found');
+        }
+        inputPath = filePath;
+      } else if (params.audioData) {
+        // Enhance uploaded audio (not yet saved)
+        const tmpId = randomUUID();
+        inputPath = path.join(os.tmpdir(), `pocket-tts-enhance-${tmpId}-input.wav`);
+        fs.writeFileSync(inputPath, Buffer.from(params.audioData));
+        tempInputCreated = true;
+      } else {
+        throw new Error('Either voiceId or audioData must be provided');
+      }
+
+      try {
+        const result = await voiceEnhancer.enhancePreview(
+          inputPath,
+          { denoise: params.denoise },
+          (status, details) => {
+            // Forward progress to renderer
+            if (!sender.isDestroyed()) {
+              sender.send('enhance:progress', status, details);
+            }
+          }
+        );
+
+        // Read both files into ArrayBuffers
+        const originalBuffer = fs.readFileSync(inputPath);
+        const enhancedBuffer = fs.readFileSync(result.tempOutputPath);
+
+        return {
+          original: originalBuffer.buffer.slice(
+            originalBuffer.byteOffset,
+            originalBuffer.byteOffset + originalBuffer.byteLength
+          ),
+          enhanced: enhancedBuffer.buffer.slice(
+            enhancedBuffer.byteOffset,
+            enhancedBuffer.byteOffset + enhancedBuffer.byteLength
+          ),
+        };
+      } finally {
+        // Clean up temp input if we created it
+        if (tempInputCreated) {
+          try {
+            fs.unlinkSync(inputPath);
+          } catch {
+            /* ignore */
+          }
+        }
+      }
+    }
+  );
+
+  // Accept the pending enhancement — commit to permanent storage
+  ipcMain.handle(
+    'voice:enhance-accept',
+    async (
+      _event: IpcMainInvokeEvent,
+      voiceId: string
+    ): Promise<import('./voice-manager').SavedVoice | null> => {
+      const pending = voiceEnhancer.getPendingResult();
+      if (!pending) {
+        throw new Error('No pending enhancement to accept');
+      }
+
+      const updated = await voiceManager.replaceVoiceFile(voiceId, pending.tempOutputPath, {
+        denoise: pending.denoise,
+        device: pending.device,
+      });
+
+      // Clean up temp files
+      voiceEnhancer.cleanup();
+
+      return updated;
+    }
+  );
+
+  // Reject the pending enhancement — clean up temp files
+  ipcMain.handle('voice:enhance-reject', async () => {
+    voiceEnhancer.cleanup();
+  });
+
+  // Update audio normalization settings for a voice
+  ipcMain.handle(
+    'voice:update-normalization',
+    async (
+      _event: IpcMainInvokeEvent,
+      params: { voiceId: string; rmsTargetDb: number; denoise: boolean }
+    ): Promise<import('./voice-manager').SavedVoice | null> => {
+      return voiceManager.updateVoiceMetadata(params.voiceId, {
+        audioNormalization: {
+          rmsTargetDb: params.rmsTargetDb,
+          denoise: params.denoise,
+        },
+      });
+    }
+  );
+}
+
+// Clean up temp files on app quit
+export function cleanupEnhancer(): void {
+  voiceEnhancer.cancel();
+  voiceEnhancer.cleanup();
 }

@@ -7,12 +7,26 @@ export interface TTSParams {
   savedVoiceId?: string;
 }
 
+export interface EnhancementMeta {
+  enhancedAt: string;
+  denoise: boolean;
+  device: string;
+  originalBackupPath?: string;
+}
+
+export interface AudioNormalization {
+  rmsTargetDb: number;
+  denoise: boolean;
+}
+
 export interface SavedVoice {
   id: string;
   name: string;
   description: string;
   filePath: string;
   createdAt: string;
+  enhanced?: EnhancementMeta;
+  audioNormalization?: AudioNormalization;
 }
 
 export interface SpeakerConfig {
@@ -47,6 +61,14 @@ export interface ElectronAPI {
   // Audio conversion
   convertToM4a: (wavBuffer: ArrayBuffer) => Promise<ArrayBuffer>;
   isM4aAvailable: () => Promise<boolean>;
+  // Voice enhancement
+  enhancePreview: (params: { voiceId?: string; audioData?: ArrayBuffer; denoise: boolean }) => Promise<{ original: ArrayBuffer; enhanced: ArrayBuffer }>;
+  enhanceAccept: (voiceId: string) => Promise<SavedVoice>;
+  enhanceReject: () => Promise<void>;
+  isEnhanceAvailable: () => Promise<boolean>;
+  onEnhanceProgress: (callback: (status: string, details?: Record<string, unknown>) => void) => void;
+  // Audio normalization per-voice
+  updateVoiceNormalization: (params: { voiceId: string; rmsTargetDb: number; denoise: boolean }) => Promise<SavedVoice>;
 }
 
 contextBridge.exposeInMainWorld('electronAPI', {
@@ -82,4 +104,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Audio conversion
   convertToM4a: (wavBuffer: ArrayBuffer) => ipcRenderer.invoke('audio:convert-to-m4a', wavBuffer),
   isM4aAvailable: () => ipcRenderer.invoke('audio:m4a-available'),
+  // Voice enhancement
+  enhancePreview: (params: { voiceId?: string; audioData?: ArrayBuffer; denoise: boolean }) =>
+    ipcRenderer.invoke('voice:enhance-preview', params),
+  enhanceAccept: (voiceId: string) => ipcRenderer.invoke('voice:enhance-accept', voiceId),
+  enhanceReject: () => ipcRenderer.invoke('voice:enhance-reject'),
+  isEnhanceAvailable: () => ipcRenderer.invoke('voice:enhance-available'),
+  onEnhanceProgress: (callback: (status: string, details?: Record<string, unknown>) => void) => {
+    ipcRenderer.on('enhance:progress', (_event, status, details) => callback(status, details));
+  },
+  // Audio normalization per-voice
+  updateVoiceNormalization: (params: { voiceId: string; rmsTargetDb: number; denoise: boolean }) =>
+    ipcRenderer.invoke('voice:update-normalization', params),
 } as ElectronAPI);

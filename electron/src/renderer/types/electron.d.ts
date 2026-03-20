@@ -5,12 +5,26 @@ export interface TTSParams {
   savedVoiceId?: string;
 }
 
+export interface EnhancementMeta {
+  enhancedAt: string;
+  denoise: boolean;
+  device: string;
+  originalBackupPath?: string;
+}
+
+export interface AudioNormalization {
+  rmsTargetDb: number;
+  denoise: boolean;
+}
+
 export interface SavedVoice {
   id: string;
   name: string;
   description: string;
   filePath: string;
   createdAt: string;
+  enhanced?: EnhancementMeta;
+  audioNormalization?: AudioNormalization;
 }
 
 export interface SpeakerConfig {
@@ -45,6 +59,14 @@ export interface ElectronAPI {
   // Audio conversion
   convertToM4a: (wavBuffer: ArrayBuffer) => Promise<ArrayBuffer>;
   isM4aAvailable: () => Promise<boolean>;
+  // Voice enhancement
+  enhancePreview: (params: { voiceId?: string; audioData?: ArrayBuffer; denoise: boolean }) => Promise<{ original: ArrayBuffer; enhanced: ArrayBuffer }>;
+  enhanceAccept: (voiceId: string) => Promise<SavedVoice>;
+  enhanceReject: () => Promise<void>;
+  isEnhanceAvailable: () => Promise<boolean>;
+  onEnhanceProgress: (callback: (status: string, details?: Record<string, unknown>) => void) => void;
+  // Audio normalization per-voice
+  updateVoiceNormalization: (params: { voiceId: string; rmsTargetDb: number; denoise: boolean }) => Promise<SavedVoice>;
 }
 
 declare global {
