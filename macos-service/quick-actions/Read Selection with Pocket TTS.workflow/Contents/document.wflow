@@ -72,17 +72,14 @@ fi
 
 # Check if server is running
 if ! curl -s http://localhost:8765/health &gt; /dev/null; then
-    osascript -e 'display notification "TTS server is not running. Please start the server first." with title "Pocket TTS Error"'
+    osascript -e 'display notification "TTS server is not running" with title "Pocket TTS Error"'
     exit 1
 fi
 
-# Call the CLI tool
-if [ -f /usr/local/bin/pocket-tts-quick-action ]; then
-    /usr/local/bin/pocket-tts-quick-action "$selected_text"
-else
-    osascript -e 'display notification "CLI tool not installed. Run install-quick-action.sh" with title "Pocket TTS Error"'
-    exit 1
-fi</string>
+# Use the Python streaming script (uv handles deps)
+# Installed to /usr/local/bin by install-quick-action.sh
+/usr/local/bin/pocket-tts-stream "$selected_text" --quiet
+</string>
 					<key>CheckedForUserDefaultShell</key>
 					<true/>
 					<key>inputMethod</key>

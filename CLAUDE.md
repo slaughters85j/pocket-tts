@@ -90,11 +90,15 @@ React + TypeScript + Vite + Tailwind. Electron main process manages a bundled Py
 
 ### macOS Service (`macos-service/`)
 
-Two Swift Package Manager projects + shell scripts:
-- **PocketTTSQuickAction** — CLI tool invoked by Automator workflow. Sends text to `/tts` endpoint, plays streaming WAV via `AVAudioEngine`.
-- **PocketTTSMenuBar** — Menu bar app for voice selection and server monitoring. Uses AppKit lifecycle (not SwiftUI App — fixes menu not appearing).
+Python streaming script + Swift menu bar app + shell scripts:
+- **pocket-tts-stream.py** — Python script invoked by Automator workflow. Sends text to `/tts` endpoint, streams audio via ffplay for real-time playback. Includes diagnostic logging.
+- **PocketTTSMenuBar** — Swift menu bar app for voice selection and server monitoring. Uses AppKit lifecycle (not SwiftUI App — fixes menu not appearing).
+- **PocketTTSQuickAction** — Legacy Swift CLI (deprecated, kept for reference). Replaced by Python script for better streaming and logging.
 - **LaunchAgent** — `com.kyutai.pocket-tts.server.plist` auto-starts the TTS server on login (port 8765).
-- Shared config dir: `~/Library/Application Support/Pocket TTS/`
+- Shared config dir: `~/Library/Application Support/pocket-tts-electron/`
+- Logs: `~/Library/Logs/PocketTTS/tts-stream-YYYY-MM-DD.log`
+
+**Dependencies:** The Quick Action requires `ffplay` (from ffmpeg) and `uv` for Python dependency management.
 
 **Swift build warning:** Do NOT use bare `swift build` or `xcodebuild` if miniforge/conda is on PATH — it contaminates the linker. Use `xcode-builder-agent` or the `xcodebuild-clean` wrapper.
 

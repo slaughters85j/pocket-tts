@@ -542,11 +542,14 @@ def serve(
     host: Annotated[str, typer.Option(help="Host to bind to")] = "localhost",
     port: Annotated[int, typer.Option(help="Port to bind to")] = 8000,
     reload: Annotated[bool, typer.Option(help="Enable auto-reload")] = False,
+    eos_threshold: Annotated[
+        float, typer.Option(help="EOS threshold (more negative = harder to trigger EOS)")
+    ] = DEFAULT_EOS_THRESHOLD,
 ):
     """Start the FastAPI server."""
 
     global tts_model, global_model_state
-    tts_model = TTSModel.load_model(DEFAULT_VARIANT)
+    tts_model = TTSModel.load_model(DEFAULT_VARIANT, eos_threshold=eos_threshold)
 
     # Pre-load the voice prompt
     global_model_state = tts_model.get_state_for_audio_prompt(voice)

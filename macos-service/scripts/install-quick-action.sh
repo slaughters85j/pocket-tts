@@ -19,75 +19,86 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 QUICK_ACTION_DIR="$PROJECT_ROOT/PocketTTSQuickAction"
 WORKFLOW_DIR="$PROJECT_ROOT/quick-actions"
 
-# Check if Swift is installed
-if ! command -v swift &> /dev/null; then
-    echo -e "${RED}Error: Swift is not installed${NC}"
-    echo "Please install Xcode or Swift from https://developer.apple.com/xcode/"
-    exit 1
-fi
-
-echo -e "${GREEN}✓${NC} Swift found: $(swift --version | head -n1)"
-
-# Step 1: Build the Swift CLI
+# Step 1: Check dependencies
 echo
-echo "Step 1: Building Swift CLI..."
+echo "Step 1: Checking dependencies..."
 echo "--------------------------------------"
 
-cd "$QUICK_ACTION_DIR"
-
-# Clean previous builds
-echo "Cleaning previous builds..."
-swift package clean 2>/dev/null || true
-
-# Build in release mode
-echo "Building in release mode..."
-if swift build -c release; then
-    echo -e "${GREEN}✓${NC} Build successful"
+# Check ffplay (required for streaming playback)
+if command -v ffplay &> /dev/null || [ -x "/opt/homebrew/bin/ffplay" ]; then
+    echo -e "${GREEN}✓${NC} ffplay found"
 else
-    echo -e "${RED}✗${NC} Build failed"
+    echo -e "${RED}Error: ffplay not found${NC}"
+    echo "Install with: brew install ffmpeg"
     exit 1
 fi
 
-# Step 2: Install CLI binary
+# Check uv (required for Python script)
+if command -v uv &> /dev/null || [ -x "$HOME/.local/bin/uv" ]; then
+    echo -e "${GREEN}✓${NC} uv found"
+else
+    echo -e "${YELLOW}⚠${NC} uv not found - will need to install"
+    echo "Install with: curl -LsSf https://astral.sh/uv/install.sh | sh"
+fi
+
+# Step 2: Install Python streaming script
 echo
-echo "Step 2: Installing CLI binary..."
+echo "Step 2: Installing Python streaming script..."
 echo "--------------------------------------"
 
-BINARY_PATH="$QUICK_ACTION_DIR/.build/release/pocket-tts-quick-action"
-INSTALL_PATH="/usr/local/bin/pocket-tts-quick-action"
+PYTHON_SCRIPT="$SCRIPT_DIR/pocket-tts-stream.py"
+WRAPPER_SCRIPT="$SCRIPT_DIR/pocket-tts-stream"
+SHARE_DIR="/usr/local/share/pocket-tts"
+INSTALL_PATH="/usr/local/bin/pocket-tts-stream"
 
-if [ ! -f "$BINARY_PATH" ]; then
-    echo -e "${RED}Error: Binary not found at $BINARY_PATH${NC}"
+if [ ! -f "$PYTHON_SCRIPT" ]; then
+    echo -e "${RED}Error: Python script not found at $PYTHON_SCRIPT${NC}"
     exit 1
 fi
 
-# Check if /usr/local/bin exists, create if not
+# Check if /usr/local/bin and share dir exist, create if not
 if [ ! -d "/usr/local/bin" ]; then
     echo "Creating /usr/local/bin directory..."
     sudo mkdir -p /usr/local/bin
 fi
 
-# Re-sign binary with codesign (removes linker-signed flag that macOS taskgated
-# rejects when launching from Automator Quick Actions / system services)
-echo "Signing binary with ad-hoc codesign..."
-codesign --force --sign - "$BINARY_PATH"
+if [ ! -d "$SHARE_DIR" ]; then
+    echo "Creating $SHARE_DIR directory..."
+    sudo mkdir -p "$SHARE_DIR"
+fi
 
-# Copy binary (requires sudo)
-echo "Installing binary to $INSTALL_PATH (requires sudo)..."
-if sudo cp "$BINARY_PATH" "$INSTALL_PATH"; then
-    sudo chmod +x "$INSTALL_PATH"
-    echo -e "${GREEN}✓${NC} Binary installed and signed"
+# Copy Python script to share directory
+echo "Installing Python script to $SHARE_DIR..."
+if sudo cp "$PYTHON_SCRIPT" "$SHARE_DIR/pocket-tts-stream.py"; then
+    echo -e "${GREEN}✓${NC} Python script installed"
 else
-    echo -e "${RED}✗${NC} Failed to install binary"
+    echo -e "${RED}✗${NC} Failed to install Python script"
+    exit 1
+fi
+
+# Copy wrapper script
+echo "Installing wrapper to $INSTALL_PATH (requires sudo)..."
+if sudo cp "$WRAPPER_SCRIPT" "$INSTALL_PATH"; then
+    sudo chmod +x "$INSTALL_PATH"
+    echo -e "${GREEN}✓${NC} Wrapper installed"
+else
+    echo -e "${RED}✗${NC} Failed to install wrapper"
     exit 1
 fi
 
 # Verify installation
 if [ -x "$INSTALL_PATH" ]; then
-    echo -e "${GREEN}✓${NC} Binary is executable"
+    echo -e "${GREEN}✓${NC} Wrapper is executable"
 else
-    echo -e "${RED}✗${NC} Binary is not executable"
+    echo -e "${RED}✗${NC} Wrapper is not executable"
     exit 1
+fi
+
+# Check uv is available
+if command -v uv &> /dev/null || [ -x "$HOME/.local/bin/uv" ]; then
+    echo -e "${GREEN}✓${NC} uv found"
+else
+    echo -e "${YELLOW}⚠${NC} uv not found. Install with: curl -LsSf https://astral.sh/uv/install.sh | sh"
 fi
 
 # Step 3: Install Quick Action workflow

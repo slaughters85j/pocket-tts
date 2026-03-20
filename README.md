@@ -195,9 +195,13 @@ uv run pocket-tts serve --port 8765
 ### Components
 
 - **Quick Action**: Automator workflow that integrates with macOS Services menu
-- **CLI Tool**: Swift command-line tool (`pocket-tts-quick-action`) that handles TTS requests
+- **Streaming Script**: Python script (`pocket-tts-stream`) with real-time audio playback via ffplay
 - **Menu Bar App**: Native app for voice selection and server monitoring (optional)
 - **LaunchAgent**: Background service that auto-starts the TTS server on login
+
+### Logs
+
+TTS streaming logs are written to `~/Library/Logs/PocketTTS/tts-stream-YYYY-MM-DD.log` for debugging playback issues.
 
 All components share configuration at `~/Library/Application Support/Pocket TTS/` and are compatible with the Electron desktop app.
 
