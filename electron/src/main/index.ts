@@ -1,7 +1,7 @@
 import { app, BrowserWindow, ipcMain } from 'electron';
 import * as path from 'path';
 import { PythonServer } from './python-server';
-import { registerIpcHandlers } from './ipc-handlers';
+import { registerIpcHandlers, registerEnhancementHandlers, cleanupEnhancer } from './ipc-handlers';
 import { registerVoiceHandlers, getVoiceManager } from './voice-manager';
 
 let mainWindow: BrowserWindow | null = null;
@@ -65,7 +65,9 @@ app.whenReady().then(async () => {
   await createWindow();
 
   // Register IPC handlers with getter to access current server state
-  registerIpcHandlers(() => pythonServer, getVoiceManager());
+  const vm = getVoiceManager();
+  registerIpcHandlers(() => pythonServer, vm);
+  registerEnhancementHandlers(vm);
 
   try {
     await startPythonServer();
@@ -94,6 +96,7 @@ app.on('window-all-closed', () => {
 });
 
 app.on('before-quit', async () => {
+  cleanupEnhancer();
   if (pythonServer) {
     await pythonServer.stop();
   }

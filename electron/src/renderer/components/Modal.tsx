@@ -5,9 +5,10 @@ interface ModalProps {
   onClose: () => void;
   title: string;
   children: React.ReactNode;
+  maxWidth?: string; // Tailwind max-w class, default 'max-w-md'
 }
 
-export function Modal({ isOpen, onClose, title, children }: ModalProps) {
+export function Modal({ isOpen, onClose, title, children, maxWidth = 'max-w-md' }: ModalProps) {
   const handleEscape = useCallback((e: KeyboardEvent) => {
     if (e.key === 'Escape') {
       onClose();
@@ -32,7 +33,7 @@ export function Modal({ isOpen, onClose, title, children }: ModalProps) {
       />
 
       {/* Modal */}
-      <div className="relative bg-bg-secondary rounded-xl shadow-2xl max-w-md w-full mx-4 overflow-hidden">
+      <div className={`relative bg-bg-secondary rounded-xl shadow-2xl ${maxWidth} w-full mx-4 overflow-hidden`}>
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-border-color">
           <h2 className="text-lg font-semibold text-text-primary">{title}</h2>
