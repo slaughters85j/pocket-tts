@@ -11,6 +11,18 @@ import re
 
 from num2words import num2words
 
+# --- Local overrides (sensitive/user-specific terms) ---
+# These are loaded from text_normalizer_local.py if it exists
+# That file is gitignored so sensitive terms aren't committed
+try:
+    from pocket_tts.text_normalizer_local import (
+        SPOKEN_ACRONYMS_LOCAL,
+        ISR_TERMS_LOCAL,
+    )
+except ImportError:
+    SPOKEN_ACRONYMS_LOCAL: set[str] = set()
+    ISR_TERMS_LOCAL: dict[str, str] = {}
+
 # --- Unit expansion ---
 
 # Values are (singular, plural) tuples to handle irregular plurals correctly.
@@ -380,6 +392,21 @@ _PERCENT_PATTERN = re.compile(r"(\d+(?:\.\d+)?)%")
 # Time: 3:30, 14:05
 _TIME_PATTERN = re.compile(r"\b(\d{1,2}):(\d{2})\b")
 
+# List item numbers: "1." "2." etc. at start of list items (after newline, colon, or start)
+# Convert to ordinal without period to avoid EOS detection
+_LIST_ITEM_PATTERN = re.compile(r"(?:^|(?<=:\s)|(?<=\n))(\d{1,2})\.\s")
+
+
+def _expand_list_item(match: re.Match) -> str:
+    """Convert list item number to ordinal: '1. ' -> 'First, '"""
+    num = int(match.group(1))
+    try:
+        ordinal = num2words(num, to="ordinal").capitalize()
+        return f"{ordinal}, "
+    except (ValueError, OverflowError):
+        return match.group(0)
+
+
 # Standalone numbers (integers and decimals) - matched AFTER units/currency/etc.
 _NUMBER_PATTERN = re.compile(r"(?<!\w)(-?\d+(?:\.\d+)?)(?!\w|%|:)")
 
@@ -483,7 +510,7 @@ def _expand_standalone_number(match: re.Match) -> str:
 # All-caps words 2-5 chars: NASA, FBI, CPU, GPU, etc.
 _ACRONYM_PATTERN = re.compile(r"\b([A-Z]{2,5})\b")
 
-_SPOKEN_ACRONYMS = {
+_SPOKEN_ACRONYMS_BASE = {
     # Pronounceable - leave as-is (model handles these)
     "NASA",
     "NATO",
@@ -499,14 +526,16 @@ _SPOKEN_ACRONYMS = {
     # Common words that happen to be all-caps
     "OK",
 }
+# Merge with local overrides (from text_normalizer_local.py if present)
+_SPOKEN_ACRONYMS = _SPOKEN_ACRONYMS_BASE | SPOKEN_ACRONYMS_LOCAL
 
 
 def _expand_acronym(match: re.Match) -> str:
     word = match.group(1)
     if word in _SPOKEN_ACRONYMS:
         return word
-    # Spell it out with dots: FBI -> F.B.I.
-    return ".".join(word) + "."
+    # Spell it out with spaces: FBI -> F B I (periods caused premature EOS)
+    return " ".join(word)
 
 
 # --- Domain-specific terms ---
@@ -836,6 +865,8 @@ _ISR_TERMS: dict[str, str] = {
     "TDMA": "time division multiple access",
     "CDMA": "code division multiple access",
 }
+# Merge with local overrides (from text_normalizer_local.py if present)
+_ISR_TERMS.update(ISR_TERMS_LOCAL)
 
 _ISR_PATTERN = re.compile(
     r"\b("
@@ -879,6 +910,9 @@ def normalize_text(text: str) -> str:
     """
     # 1. Expand abbreviations first (before we mess with punctuation)
     text = _ABBREV_PATTERN.sub(_expand_abbreviation, text)
+
+    # 1b. List item numbers (1. Phase -> First, Phase) - before other numbers
+    text = _LIST_ITEM_PATTERN.sub(_expand_list_item, text)
 
     # 2a. Currency with magnitude words ($3.5 billion, €12 million)
     text = _CURRENCY_MAGNITUDE_PATTERN.sub(_expand_currency_magnitude, text)

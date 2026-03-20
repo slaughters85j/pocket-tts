@@ -86,3 +86,5 @@ profile_output*
 # Agents files, use a symlink to AGENTS.md instead. 
 QWEN.md
 .claude/
+# Local/sensitive term overrides (user-specific, not committed)
+pocket_tts/text_normalizer_local.py
