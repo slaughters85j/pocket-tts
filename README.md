@@ -24,8 +24,8 @@ A macOS-native fork of [Kyutai's Pocket TTS](https://github.com/kyutai-labs/pock
   <img src="Assets/Single_Voice.jpeg" alt="Single Voice Mode" width="500" /><br/>
   <img src="Assets/Multi-Talk.jpeg" alt="Multi-Talk Mode" width="500" /><br/>
   <img src="Assets/History.jpeg" alt="History View" width="500" />
-
-    [Multi-Talk Example.mp3](https://github.com/user-attachments/files/26160485/Multi-Talk.Example.mp3)
+  
+[Multi-Talk Example.mp3](https://github.com/user-attachments/files/26160493/Multi-Talk.Example.mp3)
 </p>
 
 ## Requirements
