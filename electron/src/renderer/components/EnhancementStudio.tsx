@@ -34,7 +34,7 @@ export function EnhancementStudio({
   const [progressMessage, setProgressMessage] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
   const [denoise, setDenoise] = useState(true);
-  const [rmsTargetDb, setRmsTargetDb] = useState(-20);
+  const [rmsTargetDb, setRmsTargetDb] = useState(-16);
   const [originalAudio, setOriginalAudio] = useState<ArrayBuffer | null>(null);
   const [enhancedAudio, setEnhancedAudio] = useState<ArrayBuffer | null>(null);
 
@@ -115,7 +115,7 @@ export function EnhancementStudio({
       const updatedVoice = await window.electronAPI.enhanceAccept(voiceId);
 
       // Also update normalization settings if changed from defaults
-      if (rmsTargetDb !== -20 || !denoise) {
+      if (rmsTargetDb !== -16 || !denoise) {
         await window.electronAPI.updateVoiceNormalization({
           voiceId,
           rmsTargetDb,
@@ -200,7 +200,7 @@ export function EnhancementStudio({
             <input
               type="range"
               min="-30"
-              max="-10"
+              max="-6"
               step="1"
               value={rmsTargetDb}
               onChange={(e) => setRmsTargetDb(Number(e.target.value))}
@@ -209,7 +209,7 @@ export function EnhancementStudio({
             />
             <div className="flex justify-between text-xs text-text-secondary">
               <span>Quieter (-30)</span>
-              <span>Louder (-10)</span>
+              <span>Louder (-6)</span>
             </div>
           </div>
         </div>

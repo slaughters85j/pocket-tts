@@ -12,6 +12,7 @@ interface TTSParams {
   voiceUrl?: string;
   voiceFile?: ArrayBuffer;
   savedVoiceId?: string;
+  rmsTargetDb?: number;
 }
 
 interface SpeakerConfig {
@@ -19,6 +20,7 @@ interface SpeakerConfig {
   voice_source: string;
   voice_data: string | null;
   seed: number | null;
+  rms_target_db?: number;
 }
 
 interface MultiTTSParams {
@@ -35,7 +37,7 @@ export function registerIpcHandlers(
   voiceManager: { getVoiceFilePath: (id: string) => string | null }
 ) {
   ipcMain.handle('tts:generate', async (event: IpcMainInvokeEvent, params: TTSParams) => {
-    const { text, voiceUrl, voiceFile, savedVoiceId } = params;
+    const { text, voiceUrl, voiceFile, savedVoiceId, rmsTargetDb } = params;
     const sender = event.sender;
 
     const pythonServer = getPythonServer();
@@ -72,6 +74,11 @@ export function registerIpcHandlers(
         }
       } else if (voiceUrl) {
         formData.append('voice_url', voiceUrl);
+      }
+
+      // Pass per-voice RMS normalization target if provided
+      if (rmsTargetDb !== undefined) {
+        formData.append('rms_target_db', rmsTargetDb.toString());
       }
 
       const response = await fetch(`http://localhost:${pythonServer.port}/tts`, {

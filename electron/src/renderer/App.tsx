@@ -160,11 +160,15 @@ export default function App() {
     let voiceFile: ArrayBuffer | undefined;
     let voiceUrl: string | undefined;
     let savedVoiceId: string | undefined;
+    let rmsTargetDb: number | undefined;
 
     if (customAudioFile) {
       voiceFile = await customAudioFile.arrayBuffer();
     } else if (selectedVoice.startsWith('saved:')) {
       savedVoiceId = selectedVoice.replace('saved:', '');
+      // Look up per-voice normalization setting
+      const saved = savedVoices.find((v) => v.id === savedVoiceId);
+      rmsTargetDb = saved?.audioNormalization?.rmsTargetDb;
     } else if (selectedVoice !== 'custom') {
       voiceUrl = selectedVoice;
     }
@@ -176,6 +180,7 @@ export default function App() {
         voiceUrl,
         voiceFile,
         savedVoiceId,
+        rmsTargetDb,
       });
     } catch (error) {
       setGenerationState((prev) => ({

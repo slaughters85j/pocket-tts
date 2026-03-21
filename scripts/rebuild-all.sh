@@ -188,6 +188,38 @@ else
         # Clean PATH for Swift builds
         CLEAN_PATH="$(clean_path_for_swift)"
 
+        # 3-pre. Ensure ffplay (ffmpeg) is installed — required by Quick Action
+        if command -v ffplay &> /dev/null || [ -x "/opt/homebrew/bin/ffplay" ]; then
+            ok "ffplay found"
+        else
+            warn "ffplay not found — attempting install..."
+            FFPLAY_INSTALLED=false
+            if command -v brew &> /dev/null; then
+                if brew install ffmpeg 2>&1; then
+                    ok "ffmpeg (ffplay) installed via Homebrew"
+                    FFPLAY_INSTALLED=true
+                fi
+            elif command -v port &> /dev/null; then
+                if sudo port install ffmpeg 2>&1; then
+                    ok "ffmpeg (ffplay) installed via MacPorts"
+                    FFPLAY_INSTALLED=true
+                fi
+            elif command -v nix-env &> /dev/null; then
+                if nix-env -iA nixpkgs.ffmpeg 2>&1; then
+                    ok "ffmpeg (ffplay) installed via Nix"
+                    FFPLAY_INSTALLED=true
+                fi
+            fi
+            if [ "$FFPLAY_INSTALLED" = false ]; then
+                err "ffplay missing — install ffmpeg via your package manager:"
+                echo "    brew install ffmpeg        # Homebrew"
+                echo "    sudo port install ffmpeg   # MacPorts"
+                echo "    nix-env -iA nixpkgs.ffmpeg # Nix"
+                echo "    https://ffmpeg.org/download.html"
+                FAILED_STEPS+=("ffmpeg install")
+            fi
+        fi
+
         # 3a. Install Python Quick Action (replaces deprecated Swift CLI)
         echo "  Installing Python Quick Action..."
         INSTALL_SCRIPT="$MACOS_DIR/scripts/install-quick-action.sh"

@@ -3,6 +3,7 @@ export interface TTSParams {
   voiceUrl?: string;
   voiceFile?: ArrayBuffer;
   savedVoiceId?: string;
+  rmsTargetDb?: number;
 }
 
 export interface EnhancementMeta {
@@ -32,6 +33,7 @@ export interface SpeakerConfig {
   voice_source: string;
   voice_data: string | null;
   seed: number | null;
+  rms_target_db?: number;
 }
 
 export interface MultiTTSParams {

@@ -944,7 +944,7 @@ def normalize_text(text: str) -> str:
     # 9. Domain-specific terms: ISR, SE, DoDAF, SysML, PM (before generic acronym expander)
     text = _ISR_PATTERN.sub(_expand_isr_term, text)
 
-    # 10. Expand remaining acronyms (FBI -> F.B.I.)
+    # 10. Expand remaining acronyms (FBI -> F B I)
     text = _ACRONYM_PATTERN.sub(_expand_acronym, text)
 
     # 11. Expand symbols (=, +, &, @, #)
