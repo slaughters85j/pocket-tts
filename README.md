@@ -217,4 +217,4 @@ Use of our model must comply with all applicable laws and regulations and must n
 
 **Upstream (Kyutai):** Manu Orsini*, Simon Rouard*, Gabriel De Marmiesse*, Václav Volhejn, Neil Zeghidour, Alexandre Défossez (*equal contribution)
 
-**This fork:** John Saunders — Electron app, LavaSR integration, macOS Quick Action, Menu Bar app, text normalizer, pause/resume/stop controls, reusable creations with metadata, .mp3/.mp4a/.wav export
+**This fork:** John Saunders — Electron app, LavaSR integration, macOS Quick Action, Menu Bar app, text normalizer, pause/resume/stop controls, reusable creations with metadata, .mp3/.mpa/.wav export
