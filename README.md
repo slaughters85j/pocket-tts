@@ -21,11 +21,11 @@ A macOS-native fork of [Kyutai's Pocket TTS](https://github.com/kyutai-labs/pock
 ## Screenshots
 
 <p align="center">
-  <img src="Assets/Single_Voice.jpeg" alt="Single Voice Mode" width="500" /><br/>
-  <img src="Assets/Multi-Talk.jpeg" alt="Multi-Talk Mode" width="500" /><br/>
+  <img src="Assets/Single_Voice.jpeg" alt="Single Voice Mode" width="500" /><br/><br/>
+
+  https://github.com/user-attachments/assets/20c9442f-549c-4d97-aa9b-f0b8b75218fb
+
   <img src="Assets/History.jpeg" alt="History View" width="500" />
-  
-[Multi-Talk Example.mp3](https://github.com/user-attachments/files/26160493/Multi-Talk.Example.mp3)
 </p>
 
 ## Requirements
