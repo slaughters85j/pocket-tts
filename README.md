@@ -1,280 +1,218 @@
-# Pocket TTS
+# Pocket TTS — macOS Desktop Fork
 
 <img width="1446" height="622" alt="pocket-tts-logo-v2-transparent" src="https://github.com/user-attachments/assets/637b5ed6-831f-4023-9b4c-741be21ab238" />
 
-A lightweight text-to-speech (TTS) application designed to run efficiently on CPUs.
-Forget about the hassle of using GPUs and web APIs serving TTS models. With Kyutai's Pocket TTS, generating audio is just a pip install and a function call away.
+A macOS-native fork of [Kyutai's Pocket TTS](https://github.com/kyutai-labs/pocket-tts) — a ~100M-parameter CPU-only text-to-speech engine. This fork wraps the original Python library in an Electron desktop app, a macOS Quick Action for system-wide text reading, and a Swift menu bar companion app. Voice enhancement via [LavaSR](https://github.com/ysharma3501/LavaSR) is integrated directly into the app.
 
-Supports Python 3.10, 3.11, 3.12, 3.13 and 3.14. Requires PyTorch 2.5+. Does not require the gpu version of PyTorch.
+> **Upstream:** [kyutai-labs/pocket-tts](https://github.com/kyutai-labs/pocket-tts) · [Demo](https://kyutai.org/pocket-tts) · [HuggingFace](https://huggingface.co/kyutai/pocket-tts) · [Paper](https://arxiv.org/abs/2509.06926)
 
-[🔊 Demo](https://kyutai.org/pocket-tts) | 
-[🐱‍💻GitHub Repository](https://github.com/kyutai-labs/pocket-tts) | 
-[🤗 Hugging Face Model Card](https://huggingface.co/kyutai/pocket-tts) | 
-[⚙️ Tech report](https://kyutai.org/blog/2026-01-13-pocket-tts) |
-[📄 Paper](https://arxiv.org/abs/2509.06926) | 
-[📚 Documentation](https://github.com/kyutai-labs/pocket-tts/tree/main/docs)
+## What This Fork Adds
 
+| Feature | Description |
+|---|---|
+| **Electron Desktop App** | Dark-themed GUI with voice management, streaming playback, multi-talk mode, and history |
+| **LavaSR Enhancement Studio** | A/B preview of enhanced vs original voice samples before committing — self-bootstrapping venv, no external setup |
+| **macOS Quick Action** | Select text anywhere → right-click → "Read Selection with Pocket TTS" — streams audio via ffplay |
+| **Menu Bar App** | Native Swift app for voice selection and TTS server monitoring |
+| **LaunchAgent** | Auto-starts the TTS server on login (port 8765) |
+| **Text Normalizer** | Numbers, currencies, abbreviations, acronyms, ISR/radar terms → speakable words |
+| **Pause/Resume/Stop** | Client-side audio controls + server-side cancellation |
 
-## Main takeaways
-* Runs on CPU
-* Small model size, 100M parameters
-* Audio streaming
-* Low latency, ~200ms to get the first audio chunk
-* Faster than real-time, ~6x real-time on a CPU of MacBook Air M4
-* Uses only 2 CPU cores
-* Python API and CLI
-* Voice cloning
-* English only at the moment
-* Can handle infinitely long text inputs
-* **macOS Quick Action**: System-wide text reading from any application
+## Screenshots
 
-## Trying it from the website, without installing anything
+<p align="center">
+  <img src="Assets/Single_Voice.jpeg" alt="Single Voice Mode" width="500" /><br/>
+  <img src="Assets/Multi-Talk.jpeg" alt="Multi-Talk Mode" width="500" /><br/>
+  <img src="Assets/History.jpeg" alt="History View" width="500" />
+</p>
 
-Navigate to the [Kyutai website](https://kyutai.org/pocket-tts) to try it out directly in your browser. You can input text, select different voices, and generate speech without any installation.
+## Requirements
 
-## Trying it with the CLI
+- macOS (Apple Silicon recommended)
+- Python 3.10–3.14
+- [uv](https://docs.astral.sh/uv/getting-started/installation/) (Python package manager)
+- Node.js 18+ and npm (for Electron)
+- [ffplay](https://formulae.brew.sh/formula/ffmpeg) (for Quick Action streaming — `brew install ffmpeg`)
+- PyTorch ≥ 2.5 (CPU build, installed automatically)
 
-### The `generate` command
-You can use pocket-tts directly from the command line. We recommend using
-`uv` as it installs any dependencies on the fly in an isolated environment (uv installation instructions [here](https://docs.astral.sh/uv/getting-started/installation/#standalone-installer)).
-You can also use `pip install pocket-tts` to install it manually.
-
-This will generate a wav file `./tts_output.wav` saying the default text with the default voice, and display some speed statistics.
-```bash
-uvx pocket-tts generate
-# or if you installed it manually with pip:
-pocket-tts generate
-```
-Modify the voice with `--voice` and the text with `--text`. We provide a small catalog of voices.
-
-You can take a look at [this page](https://huggingface.co/kyutai/tts-voices) which details the licenses
-for each voice.
-
-* [alba](https://huggingface.co/kyutai/tts-voices/blob/main/alba-mackenna/casual.wav)
-* [marius](https://huggingface.co/kyutai/tts-voices/blob/main/voice-donations/Selfie.wav)
-* [javert](https://huggingface.co/kyutai/tts-voices/blob/main/voice-donations/Butter.wav)
-* [jean](https://huggingface.co/kyutai/tts-voices/blob/main/ears/p010/freeform_speech_01.wav)
-* [fantine](https://huggingface.co/kyutai/tts-voices/blob/main/vctk/p244_023.wav)
-* [cosette](https://huggingface.co/kyutai/tts-voices/blob/main/expresso/ex04-ex02_confused_001_channel1_499s.wav)
-* [eponine](https://huggingface.co/kyutai/tts-voices/blob/main/vctk/p262_023.wav)
-* [azelma](https://huggingface.co/kyutai/tts-voices/blob/main/vctk/p303_023.wav)
-
-The `--voice` argument can also take a plain wav file as input for voice cloning.
-You can use your own or check out our [voice repository](https://huggingface.co/kyutai/tts-voices).
-
-> **Voice cloning requires the gated model.** The predefined voices above work out of the box, but custom voice cloning uses a separate set of model weights that require you to:
-> 1. Accept the terms at [huggingface.co/kyutai/pocket-tts](https://huggingface.co/kyutai/pocket-tts)
-> 2. Authenticate locally: `uvx hf auth login`
->
-> Without this, custom voices will return a 500 error.
-
-Feel free to check out the [generate documentation](https://github.com/kyutai-labs/pocket-tts/tree/main/docs/generate.md) for more details and examples.
-For trying multiple voices and prompts quickly, prefer using the `serve` command.
-
-### The `serve` command
-
-You can also run a local server to generate audio via HTTP requests.
-```bash
-uvx pocket-tts serve
-# or if you installed it manually with pip:
-pocket-tts serve
-```
-Navigate to `http://localhost:8000` to try the web interface, it's faster than the command line as the model is kept in memory between requests.
-
-You can check out the [serve documentation](https://github.com/kyutai-labs/pocket-tts/tree/main/docs/serve.md) for more details and examples.
-
-## Desktop App (Electron)
-
-A native desktop application is available in the `electron/` folder. It provides a polished GUI with:
-- Dark theme interface
-- Drag-and-drop audio upload for voice cloning
-- Microphone recording for voice samples
-- Voice selector with 8 predefined voices
-- Real-time streaming audio playback
-- Download generated audio
-
-![Single Voice Mode](Assets/Single_Voice.jpeg)
-![Multi-Talk Mode](Assets/Multi-Talk.jpeg)
-![History View](Assets/History.jpeg)
-
-### Running the Desktop App
+## Quick Start
 
 ```bash
-cd electron
-npm install
-npm run dev
+# 1. Clone and install Python package
+git clone https://github.com/slaughters85j/pocket-tts.git
+cd pocket-tts
+uv pip install -e .
+
+# 2. Run the Electron app in dev mode
+cd electron && npm install && npm run dev
+
+# 3. Or start the TTS server directly
+uv run pocket-tts serve --port 8765
 ```
 
-**Note:** If you encounter issues with Electron not loading properly, ensure the `ELECTRON_RUN_AS_NODE` environment variable is not set:
+## Building
+
+There are several ways to build depending on what changed. Read this section carefully — it will save you headaches.
+
+### Rebuild Everything (recommended after pulling changes)
+
 ```bash
-unset ELECTRON_RUN_AS_NODE
+./scripts/rebuild-all.sh
 ```
 
-### Building for Distribution
+This runs all steps in order:
+1. Python editable install (`uv pip install -e .`)
+2. Electron app — npm install, PyInstaller bundle, electron-builder, copy to `/Applications/`
+3. macOS Quick Action + Menu Bar App — Swift builds, workflow install
+4. LaunchAgent restart
 
+Flags:
 ```bash
-cd electron
-npm run build:electron
-```
-
-This creates platform-specific installers in the `electron/release/` folder.
-
-**Note on code changes in `pocket_tts/`:**
-
-- **LaunchAgent server (dev):** The package is installed in editable mode (`-e`), so Python source changes take effect immediately — just restart the service (`launchctl kickstart -k gui/$(id -u)/com.kyutai.pocket-tts.server`). No reinstall needed.
-- **New dependencies:** If you add a dependency to `pyproject.toml`, re-run the install from the **project root** (not a subdirectory):
-  ```bash
-  cd /path/to/pocket-tts
-  uv pip install -e .
-  ```
-- **Electron build:** PyInstaller bundles the *installed* package, not source files directly. You must reinstall and re-bundle before building:
-  ```bash
-  cd /path/to/pocket-tts
-  uv pip install -e .
-  cd electron/python && ./bundle-python.sh
-  cd electron && npm run build:electron
-  ```
-
-### Rebuilding Everything at Once
-
-Instead of manually updating each component, you can use the `rebuild-all.sh` script to update the Python package, Electron app, macOS Quick Action, and LaunchAgent in one shot:
-
-```bash
-./scripts/rebuild-all.sh              # rebuild everything
 ./scripts/rebuild-all.sh --skip-electron   # Python + macOS only
 ./scripts/rebuild-all.sh --skip-macos      # Python + Electron only
 ```
 
-This runs the following steps in order:
-1. **Python editable install** (`uv pip install -e .`)
-2. **Electron app** — `npm install`, PyInstaller bundle, `npm run build:electron`
-3. **macOS Quick Action + Menu Bar App** — Swift builds, installs CLI binary and Automator workflow
-4. **LaunchAgent restart** — restarts the background TTS server if it's loaded
+### Electron-Only Rebuild (UI/renderer changes, no Python changes)
 
-## macOS Quick Action (System-Wide Text Reading)
+If you only changed TypeScript/React code and the Python server bundle is already built, use this. It's significantly faster than a full rebuild:
 
-A native macOS service that lets you read selected text aloud from any application using Pocket TTS.
-
-### Features
-
-- **System-wide integration**: Works in any macOS app (Safari, Mail, Notes, VS Code, etc.)
-- **Quick Action**: Right-click selected text → Services → "Read Selection with Pocket TTS" OR assign a keyboard shortcut like 'F19' in Settings>Keyboard>Keyboard Shortcuts...>Services>Text> Enable to the "Read Selection with Pocket TTS" checkbox option
-- **Progressive streaming**: Audio starts playing within 1-2 seconds
-- **Voice selection**: Uses the voice configured in menu bar app or config file
-- **Native Swift**: Lightweight (197 KB binary), instant startup
-
-### Installation
-
-1. **Install the Quick Action**:
 ```bash
-cd macos-service/scripts
-./install-quick-action.sh
+cd electron && rm -rf out release && npm run build:electron \
+  && killall "Pocket TTS" 2>/dev/null; \
+  rm -rf "/Applications/Pocket TTS.app" \
+  && cp -R "release/mac-arm64/Pocket TTS.app" /Applications/ \
+  && open "/Applications/Pocket TTS.app"
 ```
 
-2. **Enable in System Settings**:
-   - System Settings → Keyboard → Shortcuts → Services
-   - Find "Read Selection with Pocket TTS" and enable it
-   - Optional: Assign a keyboard shortcut (e.g., ⌥⌘R)
+> **Why `rm -rf out release`?** Without it, electron-builder may repackage stale assets. The content-hashed JS filenames look fresh but the asar can contain old code. Always nuke `out/` and `release/` for a clean build.
 
-3. **Start the TTS server**:
+### Python Changes Only
+
+Source changes to `pocket_tts/` take effect immediately for `uv run` and the LaunchAgent (editable install). No rebuild needed unless:
+
+- **New dependency added to `pyproject.toml`**: Re-run from project root:
+  ```bash
+  uv pip install -e .
+  ```
+
+- **Changes need to be in the Electron distributable**: The Electron app bundles Python via PyInstaller, so you must re-bundle:
+  ```bash
+  uv pip install -e .
+  cd electron/python && ./bundle-python.sh
+  cd .. && npm run build:electron
+  ```
+
+### macOS Quick Action Only
+
 ```bash
-# Option 1: Install LaunchAgent (auto-start on login)
-cd macos-service/scripts
-./install-service.sh
-
-# Option 2: Run manually
-uv run pocket-tts serve --port 8765
+cd macos-service/scripts && ./install-quick-action.sh
 ```
+
+### Menu Bar App Only
+
+```bash
+cd macos-service/scripts && ./dev-test.sh
+```
+
+### Dev Mode (no build needed)
+
+```bash
+cd electron && npm run dev
+```
+
+Hot-reloads renderer changes. The dev server connects to whatever TTS server is running on port 8765.
+
+## LavaSR Voice Enhancement
+
+The app integrates [LavaSR](https://github.com/ysharma3501/LavaSR) for speech super-resolution and denoising of voice samples. Enhancement is fully self-bootstrapping:
+
+1. First time you click **"Set Up LavaSR"** in the Save Voice modal or Voice Selector, the app creates a dedicated venv at `~/Library/Application Support/pocket-tts-electron/lavasr-venv/` and installs torch, torchaudio, soundfile, and LavaSR from GitHub via `uv`.
+2. Once set up, the **Enhancement Studio** lets you preview enhanced vs original audio side-by-side before committing.
+3. Enhanced voices are tagged in `voices.json` with metadata (denoise settings, RMS normalization).
+
+No external scripts or manual venv management required — it just works.
+
+<p align="center">
+  <img src="Assets/add-voice-enhance-option.jpeg" alt="Save voice with LavaSR enhance option" width="400" /><br/>
+  <img src="Assets/enhance-tuning.jpeg" alt="Enhancement Studio — tuning controls" width="400" /><br/>
+  <img src="Assets/enhanced-voice-preview.jpeg" alt="A/B preview of enhanced voice" width="400" />
+</p>
+
+## macOS Quick Action
+
+System-wide text-to-speech from any application.
+
+### Setup
+
+1. Install: `cd macos-service/scripts && ./install-quick-action.sh`
+2. Enable in System Settings → Keyboard → Shortcuts → Services → find "Read Selection with Pocket TTS"
+3. Optional: assign a keyboard shortcut (e.g., F19)
+4. Start the server: `uv run pocket-tts serve --port 8765` (or install the LaunchAgent for auto-start)
 
 ### Usage
 
-1. Select text anywhere on your Mac
-2. Right-click → Services → "Read Selection with Pocket TTS"
-3. Audio plays immediately using your selected voice
-
-### Components
-
-- **Quick Action**: Automator workflow that integrates with macOS Services menu
-- **Streaming Script**: Python script (`pocket-tts-stream`) with real-time audio playback via ffplay
-- **Menu Bar App**: Native app for voice selection and server monitoring (optional)
-- **LaunchAgent**: Background service that auto-starts the TTS server on login
+Select text anywhere → right-click → Services → "Read Selection with Pocket TTS". Audio streams immediately via ffplay.
 
 ### Logs
 
-TTS streaming logs are written to `~/Library/Logs/PocketTTS/tts-stream-YYYY-MM-DD.log` for debugging playback issues.
+`~/Library/Logs/PocketTTS/tts-stream-YYYY-MM-DD.log`
 
-All components share configuration at `~/Library/Application Support/Pocket TTS/` and are compatible with the Electron desktop app.
+## Menu Bar App
 
-For more details, see [macos-service/README.md](macos-service/README.md) and [macos-service/PLAN.md](macos-service/PLAN.md).
+A native Swift menu bar app (`macos-service/PocketTTSMenuBar/`) for:
+- Voice selection (syncs with Electron app and Quick Action)
+- Server status monitoring
+- Stop Speaking control
 
-## Using it as a Python library
+Built with AppKit (not SwiftUI App — fixes menu not appearing). Installed to `~/Applications/Pocket TTS Menu Bar.app`.
 
-You can try out the Python library on Colab [here](https://colab.research.google.com/github/kyutai-labs/pocket-tts/blob/main/docs/pocket-tts-example.ipynb).
+## Architecture (from upstream)
 
-Install the package with
+```
+Text → SentencePiece tokenizer → LUTConditioner (embeddings)
+                                       ↓
+Audio prompt → Mimi encoder → voice state → FlowLMModel (CaLM) → latent frames
+                                                                        ↓
+                                                               Mimi decoder → PCM audio
+```
+
+- **Thread 1:** CaLM generates latent frames autoregressively (12.5 Hz, 80ms/frame)
+- **Thread 2:** Mimi decoder converts latents to waveform in parallel
+- **CPU-only** — GPU provides no speedup at this model size (~100M params)
+- **Not thread-safe** — server does not support concurrent requests
+
+## Testing
+
 ```bash
-pip install pocket-tts
-# or
-uv add pocket-tts
+uv run pytest -n 3 -v                              # all tests (3 parallel workers)
+uv run pytest tests/test_cli_generate.py -v         # single file
+uv run pytest tests/test_cli_generate.py -k "name"  # single test
 ```
 
-You can use this package as a simple Python library to generate audio from text.
-```python
-from pocket_tts import TTSModel
-import scipy.io.wavfile
+## Linting
 
-tts_model = TTSModel.load_model()
-voice_state = tts_model.get_state_for_audio_prompt(
-    "alba"  # One of the pre-made voices, see above
-    # You can also use any voice file you have locally or from Hugging Face:
-    # "./some_audio.wav"
-    # or "hf://kyutai/tts-voices/expresso/ex01-ex02_default_001_channel2_198s.wav"
-)
-audio = tts_model.generate_audio(voice_state, "Hello world, this is a test.")
-# Audio is a 1D torch tensor containing PCM data.
-scipy.io.wavfile.write("output.wav", tts_model.sample_rate, audio.numpy())
+Ruff via pre-commit. Line length 100, LF endings, relative imports banned.
+
+```bash
+uvx pre-commit install          # one-time setup
+uvx pre-commit run --all-files  # manual run
 ```
 
-You can have multiple voice states around if 
-you have multiple voices you want to use. `load_model()` 
-and `get_state_for_audio_prompt()` are relatively slow operations,
-so we recommend to keep the model and voice states in memory if you can.
+## Gotchas
 
-You can check out the [Python API documentation](https://github.com/kyutai-labs/pocket-tts/tree/main/docs/python-api.md) for more details and examples.
+- **PyTorch < 2.5** produces incorrect audio. Enforced in `pyproject.toml`.
+- **Python 3.10–3.14 only.** `uv` manages its own Python — system Python may lack headers.
+- **Electron won't load?** Check `ELECTRON_RUN_AS_NODE` is not set: `unset ELECTRON_RUN_AS_NODE`
+- **Voice cloning** requires gated HF model access (`uvx hf auth login`). Predefined voices work without auth.
+- **Editable install** means Python source changes are live immediately. New deps require `uv pip install -e .` from project root.
+- **Electron distributable** bundles PyInstaller output, not source — must re-bundle after Python changes.
 
-## Unsupported features
-
-At the moment, we do not support (but would love pull requests adding):
-- [Running the TTS inside a web browser (WebAssembly)](https://github.com/kyutai-labs/pocket-tts/issues/1)
-- [A compiled version with for example `torch.compile()` or `candle`.](https://github.com/kyutai-labs/pocket-tts/issues/2)
-- [Adding silence in the text input to generate pauses.](https://github.com/kyutai-labs/pocket-tts/issues/6)
-- [Quantization to run the computation in int8.](https://github.com/kyutai-labs/pocket-tts/issues/7)
-
-We tried running this TTS model on the GPU but did not observe a speedup compared to CPU execution,
-notably because we use a batch size of 1 and a very small model.
-
-## Development and local setup
-
-We accept contributions! Feel free to open issues or pull requests on GitHub.
-
-You can find development instructions in the [CONTRIBUTING.md](https://github.com/kyutai-labs/pocket-tts/tree/main/CONTRIBUTING.md) file. You'll also find there how to have an editable install of the package for local development.
-
-## Alternative implementations
-
-- [babybirdprd/pocket-tts](https://github.com/babybirdprd/pocket-tts) - Candle version (Rust) with WebAssembly and PyO3 bindings. Can run in the browser!
-
-## Projects using pocket-tts
-
-- [lukasmwerner/pocket-reader](https://github.com/lukasmwerner/pocket-reader) - Browser screen reader
-- [ikidd/pocket-tts-wyoming](https://github.com/ikidd/pocket-tts-wyoming) - Docker container for pocket-tts using Wyoming protocol, ready for Home Assistant Voice use.
-
-## Prohibited use
+## Prohibited Use
 
 Use of our model must comply with all applicable laws and regulations and must not result in, involve, or facilitate any illegal, harmful, deceptive, fraudulent, or unauthorized activity. Prohibited uses include, without limitation, voice impersonation or cloning without explicit and lawful consent; misinformation, disinformation, or deception (including fake news, fraudulent calls, or presenting generated content as genuine recordings of real people or events); and the generation of unlawful, harmful, libelous, abusive, harassing, discriminatory, hateful, or privacy-invasive content. We disclaim all liability for any non-compliant use.
 
-
 ## Authors
 
-Manu Orsini*, Simon Rouard*, Gabriel De Marmiesse*, Václav Volhejn, Neil Zeghidour, Alexandre Défossez
+**Upstream (Kyutai):** Manu Orsini*, Simon Rouard*, Gabriel De Marmiesse*, Václav Volhejn, Neil Zeghidour, Alexandre Défossez (*equal contribution)
 
-*equal contribution
+**This fork:** John Saunders — Electron app, LavaSR integration, macOS Quick Action, Menu Bar app, text normalizer, pause/resume/stop controls, reusable creations with metadata, .mp3/.mp4a/.wav export
