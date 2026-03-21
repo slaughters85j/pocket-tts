@@ -21,11 +21,13 @@ A macOS-native fork of [Kyutai's Pocket TTS](https://github.com/kyutai-labs/pock
 ## Screenshots
 
 <p align="center">
-  <img src="Assets/Single_Voice.jpeg" alt="Single Voice Mode" width="500" /><br/><br/>
+  <img src="Assets/Single_Voice.jpeg" alt="Single Voice Mode" width="625" />
+</p>
 
-  https://github.com/user-attachments/assets/20c9442f-549c-4d97-aa9b-f0b8b75218fb
+https://github.com/user-attachments/assets/20c9442f-549c-4d97-aa9b-f0b8b75218fb
 
-  <img src="Assets/History.jpeg" alt="History View" width="500" />
+<p align="center">
+  <img src="Assets/History.jpeg" alt="History View" width="625" />
 </p>
 
 ## Requirements
@@ -135,9 +137,9 @@ The app integrates [LavaSR](https://github.com/ysharma3501/LavaSR) for speech su
 No external scripts or manual venv management required — it just works.
 
 <p align="center">
-  <img src="Assets/add-voice-enhance-option.jpeg" alt="Save voice with LavaSR enhance option" width="400" /><br/>
-  <img src="Assets/enhance-tuning.jpeg" alt="Enhancement Studio — tuning controls" width="400" /><br/>
-  <img src="Assets/enhanced-voice-preview.jpeg" alt="A/B preview of enhanced voice" width="400" />
+  <img src="Assets/add-voice-enhance-option.jpeg" alt="Save voice with LavaSR enhance option" width="625" /><br/>
+  <img src="Assets/enhance-tuning.jpeg" alt="Enhancement Studio — tuning controls" width="625" /><br/>
+  <img src="Assets/enhanced-voice-preview.jpeg" alt="A/B preview of enhanced voice" width="625" />
 </p>
 
 ## macOS Quick Action
