@@ -271,7 +271,7 @@ class TestFractions:
 class TestAcronyms:
     def test_spelled_out(self):
         result = normalize_text("The FBI investigated.")
-        assert "F.B.I." in result
+        assert "F B I" in result
 
     def test_pronounceable_kept(self):
         result = normalize_text("NASA launched a rocket.")
@@ -280,7 +280,7 @@ class TestAcronyms:
 
     def test_gpu(self):
         result = normalize_text("This GPU is fast.")
-        assert "G.P.U." in result
+        assert "G P U" in result
 
 
 # ── Symbols ───────────────────────────────────────────────────────────

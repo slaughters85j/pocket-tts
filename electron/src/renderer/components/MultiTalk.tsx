@@ -64,6 +64,7 @@ export function MultiTalk({ pendingConfig, onConfigLoaded }: MultiTalkProps) {
   const [script, setScript] = useState('');
   const [showPauseModal, setShowPauseModal] = useState(false);
   const [savedVoices, setSavedVoices] = useState<SavedVoice[]>([]);
+  const [normStrategy, setNormStrategy] = useState<'per_voice' | 'match_quietest' | 'match_loudest'>('per_voice');
 
   // Load saved voices on mount
   useEffect(() => {
@@ -327,8 +328,29 @@ export function MultiTalk({ pendingConfig, onConfigLoaded }: MultiTalkProps) {
       }
     });
 
-    // Build speakers data
-    const speakersData = speakers.map((s) => ({
+    // Build speakers data with per-voice normalization
+    const perVoiceDbValues = speakers.map((s) => {
+      if (s.voice.startsWith('saved:')) {
+        const savedId = s.voice.replace('saved:', '');
+        const saved = savedVoices.find((v) => v.id === savedId);
+        return saved?.audioNormalization?.rmsTargetDb ?? -16;
+      }
+      return -16; // default for predefined/uploaded/URL voices
+    });
+
+    // Resolve effective target_db per speaker based on strategy
+    let effectiveDbValues: number[];
+    if (normStrategy === 'match_quietest') {
+      const quietest = Math.min(...perVoiceDbValues);
+      effectiveDbValues = perVoiceDbValues.map(() => quietest);
+    } else if (normStrategy === 'match_loudest') {
+      const loudest = Math.max(...perVoiceDbValues);
+      effectiveDbValues = perVoiceDbValues.map(() => loudest);
+    } else {
+      effectiveDbValues = perVoiceDbValues; // per_voice
+    }
+
+    const speakersData = speakers.map((s, i) => ({
       name: s.name,
       voice_source:
         s.voice === 'upload'
@@ -338,6 +360,7 @@ export function MultiTalk({ pendingConfig, onConfigLoaded }: MultiTalkProps) {
           : s.voice, // includes 'saved:id' and predefined voices
       voice_data: s.voice === 'upload' ? s.fileData : null,
       seed: s.seed,
+      rms_target_db: effectiveDbValues[i],
     }));
 
     try {
@@ -353,7 +376,7 @@ export function MultiTalk({ pendingConfig, onConfigLoaded }: MultiTalkProps) {
         error: error instanceof Error ? error.message : 'Unknown error',
       }));
     }
-  }, [script, speakers]);
+  }, [script, speakers, normStrategy, savedVoices]);
 
   const handleStop = useCallback(() => {
     playerRef.current?.stop();
@@ -567,13 +590,39 @@ export function MultiTalk({ pendingConfig, onConfigLoaded }: MultiTalkProps) {
           className={`w-full bg-bg-tertiary text-text-primary border border-border-color rounded-lg px-4 py-3 text-sm font-mono
             placeholder:text-text-secondary/50
             focus:outline-none focus:ring-2 focus:ring-accent focus:border-transparent
-            resize-y
+            resize-y min-h-[300px]
             ${isGenerating ? 'opacity-50 cursor-not-allowed' : ''}`}
         />
         <p className="mt-2 text-xs text-text-secondary">
           Use {'{SpeakerName}'} to indicate who speaks. Names must match
           speakers defined above.
         </p>
+      </div>
+
+      {/* Volume Normalization Strategy */}
+      <div className="bg-bg-secondary rounded-lg p-4">
+        <div className="flex items-center justify-between">
+          <div>
+            <label className="block text-sm font-medium text-text-primary">
+              Volume Normalization
+            </label>
+            <p className="text-xs text-text-secondary mt-0.5">
+              How to handle different loudness levels across speakers
+            </p>
+          </div>
+          <select
+            value={normStrategy}
+            onChange={(e) => setNormStrategy(e.target.value as typeof normStrategy)}
+            disabled={isGenerating}
+            className={`bg-bg-tertiary text-text-primary border border-border-color rounded-lg px-3 py-1.5 text-sm
+              focus:outline-none focus:ring-2 focus:ring-accent focus:border-transparent
+              ${isGenerating ? 'opacity-50 cursor-not-allowed' : ''}`}
+          >
+            <option value="per_voice">Per Voice</option>
+            <option value="match_quietest">Match Quietest</option>
+            <option value="match_loudest">Match Loudest</option>
+          </select>
+        </div>
       </div>
 
       {/* Generate / Playback Controls */}

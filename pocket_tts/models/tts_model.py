@@ -259,12 +259,13 @@ class TTSModel(nn.Module):
         return output_embeddings[:, None, :], is_eos
 
     @staticmethod
-    def _normalize_audio_rms(audio: torch.Tensor, target_db: float = -20.0) -> torch.Tensor:
+    def _normalize_audio_rms(audio: torch.Tensor, target_db: float = -16.0) -> torch.Tensor:
         """Normalize audio to a target RMS level in dB (relative to full scale).
 
         This ensures all voice prompts enter Mimi at a consistent volume,
         preventing recording-level differences from affecting output loudness
         while preserving spectral/prosodic characteristics (e.g. yelling vs calm).
+        Default of -16 dB aligns with broadcast RMS standards (-14 to -16 dB).
         """
         rms = audio.square().mean().sqrt()
         if rms < 1e-8:
@@ -273,8 +274,8 @@ class TTSModel(nn.Module):
         gain = target_rms / rms
         return (audio * gain).clamp(-1.0, 1.0)
 
-    def _encode_audio(self, audio: torch.Tensor) -> torch.Tensor:
-        audio = self._normalize_audio_rms(audio)
+    def _encode_audio(self, audio: torch.Tensor, target_db: float = -16.0) -> torch.Tensor:
+        audio = self._normalize_audio_rms(audio, target_db=target_db)
         encoded = self.mimi.encode_to_latent(audio)
         latents = encoded.transpose(-1, -2).to(torch.float32)
         conditioning = F.linear(latents, self.flow_lm.speaker_proj_weight)
@@ -717,15 +718,21 @@ class TTSModel(nn.Module):
         latents_queue.put(None)
         logger.info("Average generation step time: %d ms", int(statistics.mean(steps_times)))
 
-    @lru_cache(maxsize=2)
+    @lru_cache(maxsize=4)
     def _cached_get_state_for_audio_prompt(
-        self, audio_conditioning: Path | str | torch.Tensor, truncate: bool = False
+        self,
+        audio_conditioning: Path | str | torch.Tensor,
+        truncate: bool = False,
+        target_db: float = -16.0,
     ) -> dict:
-        return self.get_state_for_audio_prompt(audio_conditioning, truncate)
+        return self.get_state_for_audio_prompt(audio_conditioning, truncate, target_db)
 
     @torch.no_grad
     def get_state_for_audio_prompt(
-        self, audio_conditioning: Path | str | torch.Tensor, truncate: bool = False
+        self,
+        audio_conditioning: Path | str | torch.Tensor,
+        truncate: bool = False,
+        target_db: float = -16.0,
     ) -> dict:
         """Create model state conditioned on audio prompt for continuation.
 
@@ -741,6 +748,9 @@ class TTSModel(nn.Module):
                 - torch.Tensor: Pre-loaded audio tensor with shape [channels, samples]
             truncate: Whether to truncate long audio prompts to 30 seconds.
                 Helps prevent memory issues with very long inputs. Defaults to False.
+            target_db: RMS normalization target in dB (relative to full scale).
+                Controls the loudness of the voice prompt before encoding.
+                Defaults to -16.0 dB (broadcast standard).
 
         Returns:
             dict: Model state dictionary containing hidden states and positional
@@ -790,7 +800,9 @@ class TTSModel(nn.Module):
                 )
 
             with display_execution_time("Encoding audio prompt"):
-                prompt = self._encode_audio(audio_conditioning.unsqueeze(0).to(self.device))
+                prompt = self._encode_audio(
+                    audio_conditioning.unsqueeze(0).to(self.device), target_db=target_db
+                )
                 # import safetensors.torch
                 # safetensors.torch.save_file(
                 #     {"audio_prompt": prompt},

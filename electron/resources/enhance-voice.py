@@ -37,14 +37,39 @@ def detect_device(requested: str) -> str:
     return "cpu"
 
 
+def normalize_rms(audio_tensor, target_db: float):
+    """Normalize audio tensor to a target RMS level in dB (relative to full scale)."""
+    import torch
+
+    rms = audio_tensor.float().square().mean().sqrt()
+    if rms < 1e-8:
+        return audio_tensor
+    target_rms = 10 ** (target_db / 20.0)
+    gain = target_rms / rms
+    return (audio_tensor * gain).clamp(-1.0, 1.0)
+
+
+def measure_rms_db(audio_tensor) -> float:
+    """Measure the RMS level of an audio tensor in dB."""
+    rms = audio_tensor.float().square().mean().sqrt()
+    if rms < 1e-8:
+        return -100.0
+    return 20.0 * float(rms.log10())
+
+
 def enhance_audio(
     input_path: str,
     output_path: str,
     denoise: bool = True,
     device: str = "auto",
     target_sr: int = 24000,
+    rms_target_db: float | None = None,
 ) -> dict:
-    """Enhance audio using LavaSR v2 and resample to target sample rate.
+    """Enhance audio using LavaSR v2, resample, and optionally RMS-normalize.
+
+    Args:
+        rms_target_db: If provided, normalize the output WAV to this RMS level.
+            The value is baked into the file on disk.
 
     Returns dict with enhancement metadata.
     """
@@ -81,13 +106,41 @@ def enhance_audio(
     else:
         output_sr = lavasr_sr
 
+    # Measure pre-normalization RMS
+    flat = output_tensor.flatten() if output_tensor.dim() > 1 else output_tensor
+    pre_rms_db = measure_rms_db(flat)
+
+    # Apply RMS normalization if requested
+    if rms_target_db is not None:
+        emit("normalizing", rms_target_db=rms_target_db, pre_rms_db=round(pre_rms_db, 1))
+        output_tensor = normalize_rms(output_tensor, rms_target_db)
+
+    post_rms_db = measure_rms_db(
+        output_tensor.flatten() if output_tensor.dim() > 1 else output_tensor
+    )
+
     output_np = output_tensor.numpy().squeeze()
 
     sf.write(output_path, output_np, output_sr)
 
-    emit("done", output_sr=output_sr, device=device, denoise=denoise)
+    emit(
+        "done",
+        output_sr=output_sr,
+        device=device,
+        denoise=denoise,
+        rms_target_db=rms_target_db,
+        pre_rms_db=round(pre_rms_db, 1),
+        post_rms_db=round(post_rms_db, 1),
+    )
 
-    return {"output_sr": output_sr, "device": device, "denoise": denoise}
+    return {
+        "output_sr": output_sr,
+        "device": device,
+        "denoise": denoise,
+        "rms_target_db": rms_target_db,
+        "pre_rms_db": round(pre_rms_db, 1),
+        "post_rms_db": round(post_rms_db, 1),
+    }
 
 
 def main():
@@ -117,6 +170,12 @@ def main():
         default=24000,
         help="Target sample rate (default: 24000 for Mimi codec)",
     )
+    parser.add_argument(
+        "--rms-target-db",
+        type=float,
+        default=None,
+        help="RMS normalization target in dB (e.g., -14). Baked into the output WAV.",
+    )
 
     args = parser.parse_args()
 
@@ -131,6 +190,7 @@ def main():
             denoise=args.denoise,
             device=args.device,
             target_sr=args.target_sr,
+            rms_target_db=args.rms_target_db,
         )
     except Exception as e:
         emit("error", message=str(e))

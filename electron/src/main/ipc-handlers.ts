@@ -12,6 +12,7 @@ interface TTSParams {
   voiceUrl?: string;
   voiceFile?: ArrayBuffer;
   savedVoiceId?: string;
+  rmsTargetDb?: number;
 }
 
 interface SpeakerConfig {
@@ -19,6 +20,7 @@ interface SpeakerConfig {
   voice_source: string;
   voice_data: string | null;
   seed: number | null;
+  rms_target_db?: number;
 }
 
 interface MultiTTSParams {
@@ -35,7 +37,7 @@ export function registerIpcHandlers(
   voiceManager: { getVoiceFilePath: (id: string) => string | null }
 ) {
   ipcMain.handle('tts:generate', async (event: IpcMainInvokeEvent, params: TTSParams) => {
-    const { text, voiceUrl, voiceFile, savedVoiceId } = params;
+    const { text, voiceUrl, voiceFile, savedVoiceId, rmsTargetDb } = params;
     const sender = event.sender;
 
     const pythonServer = getPythonServer();
@@ -72,6 +74,11 @@ export function registerIpcHandlers(
         }
       } else if (voiceUrl) {
         formData.append('voice_url', voiceUrl);
+      }
+
+      // Pass per-voice RMS normalization target if provided
+      if (rmsTargetDb !== undefined) {
+        formData.append('rms_target_db', rmsTargetDb.toString());
       }
 
       const response = await fetch(`http://localhost:${pythonServer.port}/tts`, {
@@ -314,6 +321,7 @@ export function registerEnhancementHandlers(
   voiceManager: {
     getVoiceFilePath: (id: string) => string | null;
     getVoiceAudioBuffer: (id: string) => Promise<Buffer | null>;
+    getSavedVoices: () => Promise<import('./voice-manager').SavedVoice[]>;
     replaceVoiceFile: (
       id: string,
       newFilePath: string,
@@ -353,19 +361,36 @@ export function registerEnhancementHandlers(
     'voice:enhance-preview',
     async (
       event: IpcMainInvokeEvent,
-      params: { voiceId?: string; audioData?: ArrayBuffer; denoise: boolean }
+      params: {
+        voiceId?: string;
+        audioData?: ArrayBuffer;
+        denoise: boolean;
+        rmsTargetDb?: number;
+        useOriginalBackup?: boolean;
+      }
     ): Promise<{ original: ArrayBuffer; enhanced: ArrayBuffer }> => {
       const sender = event.sender;
       let inputPath: string;
       let tempInputCreated = false;
 
       if (params.voiceId) {
-        // Enhance an existing saved voice
-        const filePath = voiceManager.getVoiceFilePath(params.voiceId);
-        if (!filePath || !fs.existsSync(filePath)) {
-          throw new Error('Voice file not found');
+        if (params.useOriginalBackup) {
+          // Edit Enhancement: source from the pre-enhancement backup
+          const voices = await voiceManager.getSavedVoices();
+          const voice = voices.find((v: import('./voice-manager').SavedVoice) => v.id === params.voiceId);
+          const backupPath = voice?.enhanced?.originalBackupPath;
+          if (!backupPath || !fs.existsSync(backupPath)) {
+            throw new Error('Original backup not found. Cannot edit enhancement.');
+          }
+          inputPath = backupPath;
+        } else {
+          // First-time enhance: source from the current voice file
+          const filePath = voiceManager.getVoiceFilePath(params.voiceId);
+          if (!filePath || !fs.existsSync(filePath)) {
+            throw new Error('Voice file not found');
+          }
+          inputPath = filePath;
         }
-        inputPath = filePath;
       } else if (params.audioData) {
         // Enhance uploaded audio (not yet saved)
         const tmpId = randomUUID();
@@ -379,7 +404,7 @@ export function registerEnhancementHandlers(
       try {
         const result = await voiceEnhancer.enhancePreview(
           inputPath,
-          { denoise: params.denoise },
+          { denoise: params.denoise, rmsTargetDb: params.rmsTargetDb },
           (status, details) => {
             // Forward progress to renderer
             if (!sender.isDestroyed()) {
@@ -420,8 +445,9 @@ export function registerEnhancementHandlers(
     'voice:enhance-accept',
     async (
       _event: IpcMainInvokeEvent,
-      voiceId: string
+      params: { voiceId: string; rmsTargetDb?: number; denoise?: boolean }
     ): Promise<import('./voice-manager').SavedVoice | null> => {
+      const voiceId = typeof params === 'string' ? params : params.voiceId;
       const pending = voiceEnhancer.getPendingResult();
       if (!pending) {
         throw new Error('No pending enhancement to accept');
@@ -432,10 +458,22 @@ export function registerEnhancementHandlers(
         device: pending.device,
       });
 
+      // Also update audioNormalization metadata with the baked-in RMS value
+      if (updated && pending.rmsTargetDb !== undefined) {
+        await voiceManager.updateVoiceMetadata(voiceId, {
+          audioNormalization: {
+            rmsTargetDb: pending.rmsTargetDb,
+            denoise: pending.denoise,
+          },
+        });
+      }
+
       // Clean up temp files
       voiceEnhancer.cleanup();
 
-      return updated;
+      // Re-fetch the voice to return the latest metadata
+      const voices = await voiceManager.getSavedVoices();
+      return voices.find((v: import('./voice-manager').SavedVoice) => v.id === voiceId) ?? updated;
     }
   );
 

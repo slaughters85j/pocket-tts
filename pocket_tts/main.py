@@ -84,6 +84,7 @@ class SpeakerConfig:
     voice_source: str  # predefined name, URL, or "uploaded"
     voice_data: Optional[str] = None  # Base64-encoded WAV if uploaded
     seed: Optional[int] = None
+    rms_target_db: float = -16.0  # Per-voice RMS normalization target
 
 
 @dataclass
@@ -288,6 +289,7 @@ def text_to_speech(
     text: str = Form(...),
     voice_url: str | None = Form(None),
     voice_wav: UploadFile | None = File(None),
+    rms_target_db: float = Form(-16.0),
 ):
     """
     Generate speech from text using the pre-loaded voice prompt or a custom voice.
@@ -296,6 +298,7 @@ def text_to_speech(
         text: Text to convert to speech
         voice_url: Optional voice URL (http://, https://, or hf://)
         voice_wav: Optional uploaded voice file (mutually exclusive with voice_url)
+        rms_target_db: RMS normalization target in dB (-30 to -6). Controls voice loudness.
     """
     if not text.strip():
         raise HTTPException(status_code=400, detail="Text cannot be empty")
@@ -314,7 +317,9 @@ def text_to_speech(
             raise HTTPException(
                 status_code=400, detail="voice_url must start with http://, https://, or hf://"
             )
-        model_state = tts_model._cached_get_state_for_audio_prompt(voice_url, truncate=True)
+        model_state = tts_model._cached_get_state_for_audio_prompt(
+            voice_url, truncate=True, target_db=rms_target_db
+        )
         logging.warning("Using voice from URL: %s", voice_url)
     elif voice_wav is not None:
         # Use uploaded voice file
@@ -325,7 +330,7 @@ def text_to_speech(
 
             try:
                 model_state = tts_model.get_state_for_audio_prompt(
-                    Path(temp_file.name), truncate=True
+                    Path(temp_file.name), truncate=True, target_db=rms_target_db
                 )
             finally:
                 os.unlink(temp_file.name)
@@ -384,6 +389,7 @@ def multi_talk_to_speech(
                 voice_source=s["voice_source"],
                 voice_data=s.get("voice_data"),
                 seed=s.get("seed"),
+                rms_target_db=s.get("rms_target_db", -16.0),
             )
         )
 
@@ -419,13 +425,15 @@ def multi_talk_to_speech(
                 temp_file.flush()
                 try:
                     voice_states[config.name] = tts_model.get_state_for_audio_prompt(
-                        Path(temp_file.name), truncate=True
+                        Path(temp_file.name),
+                        truncate=True,
+                        target_db=config.rms_target_db,
                     )
                 finally:
                     os.unlink(temp_file.name)
         elif config.voice_source in PREDEFINED_VOICES:
             voice_states[config.name] = tts_model._cached_get_state_for_audio_prompt(
-                config.voice_source, truncate=True
+                config.voice_source, truncate=True, target_db=config.rms_target_db
             )
         elif (
             config.voice_source.startswith("http://")
@@ -433,7 +441,7 @@ def multi_talk_to_speech(
             or config.voice_source.startswith("hf://")
         ):
             voice_states[config.name] = tts_model._cached_get_state_for_audio_prompt(
-                config.voice_source, truncate=True
+                config.voice_source, truncate=True, target_db=config.rms_target_db
             )
         else:
             raise HTTPException(
@@ -497,7 +505,9 @@ def multi_talk_to_speech(
                 # Apply crossfade with previous segment's tail
                 fade_out = np.linspace(1.0, 0.0, crossfade_samples)
                 fade_in = np.linspace(0.0, 1.0, crossfade_samples)
-                crossfaded = prev_tail * fade_out + audio_np[:crossfade_samples] * fade_in
+                crossfaded = np.clip(
+                    prev_tail * fade_out + audio_np[:crossfade_samples] * fade_in, -1.0, 1.0
+                )
                 # Convert and yield the crossfaded portion
                 crossfaded_int16 = (crossfaded * 32767).astype(np.int16)
                 yield crossfaded_int16.tobytes()

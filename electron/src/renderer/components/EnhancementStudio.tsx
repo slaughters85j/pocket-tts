@@ -16,6 +16,12 @@ interface EnhancementStudioProps {
   audioData?: ArrayBuffer | null;
   /** Called after successful enhancement accept */
   onAccepted: (updatedVoice: SavedVoice) => void;
+  /** Edit mode: re-enhance from original backup with pre-populated settings */
+  editMode?: boolean;
+  /** Initial denoise setting (from previous enhancement) */
+  initialDenoise?: boolean;
+  /** Initial RMS target (from previous enhancement, baked into WAV) */
+  initialRmsTargetDb?: number;
 }
 
 /**
@@ -29,12 +35,15 @@ export function EnhancementStudio({
   voiceName,
   audioData,
   onAccepted,
+  editMode = false,
+  initialDenoise,
+  initialRmsTargetDb,
 }: EnhancementStudioProps) {
   const [status, setStatus] = useState<EnhanceStatus>('idle');
   const [progressMessage, setProgressMessage] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
-  const [denoise, setDenoise] = useState(true);
-  const [rmsTargetDb, setRmsTargetDb] = useState(-20);
+  const [denoise, setDenoise] = useState(initialDenoise ?? true);
+  const [rmsTargetDb, setRmsTargetDb] = useState(initialRmsTargetDb ?? -16);
   const [originalAudio, setOriginalAudio] = useState<ArrayBuffer | null>(null);
   const [enhancedAudio, setEnhancedAudio] = useState<ArrayBuffer | null>(null);
 
@@ -75,8 +84,10 @@ export function EnhancementStudio({
       setOriginalAudio(null);
       setEnhancedAudio(null);
       setProgressMessage('');
+      setDenoise(initialDenoise ?? true);
+      setRmsTargetDb(initialRmsTargetDb ?? -16);
     }
-  }, [isOpen]);
+  }, [isOpen, initialDenoise, initialRmsTargetDb]);
 
   const handleEnhance = useCallback(async () => {
     setStatus('enhancing');
@@ -88,6 +99,8 @@ export function EnhancementStudio({
         voiceId: voiceId ?? undefined,
         audioData: audioData ?? undefined,
         denoise,
+        rmsTargetDb,
+        useOriginalBackup: editMode,
       });
 
       setOriginalAudio(result.original);
@@ -99,7 +112,7 @@ export function EnhancementStudio({
       setStatus('error');
       setProgressMessage('');
     }
-  }, [voiceId, audioData, denoise]);
+  }, [voiceId, audioData, denoise, rmsTargetDb, editMode]);
 
   const handleAccept = useCallback(async () => {
     if (!voiceId) {
@@ -112,16 +125,11 @@ export function EnhancementStudio({
     setError(null);
 
     try {
-      const updatedVoice = await window.electronAPI.enhanceAccept(voiceId);
-
-      // Also update normalization settings if changed from defaults
-      if (rmsTargetDb !== -20 || !denoise) {
-        await window.electronAPI.updateVoiceNormalization({
-          voiceId,
-          rmsTargetDb,
-          denoise,
-        });
-      }
+      const updatedVoice = await window.electronAPI.enhanceAccept({
+        voiceId,
+        rmsTargetDb,
+        denoise,
+      });
 
       onAccepted(updatedVoice);
       onClose();
@@ -159,7 +167,7 @@ export function EnhancementStudio({
   const isProcessing = status === 'enhancing' || status === 'saving';
 
   return (
-    <Modal isOpen={isOpen} onClose={handleClose} title="Enhancement Studio" maxWidth="max-w-2xl">
+    <Modal isOpen={isOpen} onClose={handleClose} title={editMode ? 'Edit Enhancement' : 'Enhancement Studio'} maxWidth="max-w-2xl">
       <div className="space-y-4" style={{ minWidth: '500px' }}>
         {/* Voice info */}
         <div className="bg-bg-tertiary rounded-lg px-3 py-2">
@@ -200,7 +208,7 @@ export function EnhancementStudio({
             <input
               type="range"
               min="-30"
-              max="-10"
+              max="-6"
               step="1"
               value={rmsTargetDb}
               onChange={(e) => setRmsTargetDb(Number(e.target.value))}
@@ -209,7 +217,7 @@ export function EnhancementStudio({
             />
             <div className="flex justify-between text-xs text-text-secondary">
               <span>Quieter (-30)</span>
-              <span>Louder (-10)</span>
+              <span>Louder (-6)</span>
             </div>
           </div>
         </div>

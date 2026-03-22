@@ -122,7 +122,7 @@ export function SpeakerCard({
               <optgroup label="My Saved Voices">
                 {savedVoices.map((v) => (
                   <option key={`saved:${v.id}`} value={`saved:${v.id}`}>
-                    {v.name}{v.description ? ` - ${v.description}` : ''}
+                    {v.enhanced ? '\u2728 ' : ''}{v.name}{v.description ? ` - ${v.description}` : ''}
                   </option>
                 ))}
               </optgroup>
