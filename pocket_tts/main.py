@@ -505,7 +505,9 @@ def multi_talk_to_speech(
                 # Apply crossfade with previous segment's tail
                 fade_out = np.linspace(1.0, 0.0, crossfade_samples)
                 fade_in = np.linspace(0.0, 1.0, crossfade_samples)
-                crossfaded = prev_tail * fade_out + audio_np[:crossfade_samples] * fade_in
+                crossfaded = np.clip(
+                    prev_tail * fade_out + audio_np[:crossfade_samples] * fade_in, -1.0, 1.0
+                )
                 # Convert and yield the crossfaded portion
                 crossfaded_int16 = (crossfaded * 32767).astype(np.int16)
                 yield crossfaded_int16.tobytes()
