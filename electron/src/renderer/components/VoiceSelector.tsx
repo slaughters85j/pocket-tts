@@ -151,13 +151,13 @@ export function VoiceSelector({
                     Edit Enhancement
                   </button>
                 )}
-                {onEnhanceVoice && (
+                {!selectedSavedVoice?.enhanced && onEnhanceVoice && (
                   <button
                     onClick={() => onEnhanceVoice(selectedVoice.replace('saved:', ''))}
                     disabled={disabled}
                     className="text-xs text-accent hover:text-accent-hover transition-colors disabled:opacity-50"
                   >
-                    {selectedSavedVoice?.enhanced ? 'Re-enhance' : 'Enhance with LavaSR'}
+                    Enhance with LavaSR
                   </button>
                 )}
               </>
