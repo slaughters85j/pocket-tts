@@ -64,8 +64,14 @@ export interface ElectronAPI {
   convertToM4a: (wavBuffer: ArrayBuffer) => Promise<ArrayBuffer>;
   isM4aAvailable: () => Promise<boolean>;
   // Voice enhancement
-  enhancePreview: (params: { voiceId?: string; audioData?: ArrayBuffer; denoise: boolean }) => Promise<{ original: ArrayBuffer; enhanced: ArrayBuffer }>;
-  enhanceAccept: (voiceId: string) => Promise<SavedVoice>;
+  enhancePreview: (params: {
+    voiceId?: string;
+    audioData?: ArrayBuffer;
+    denoise: boolean;
+    rmsTargetDb?: number;
+    useOriginalBackup?: boolean;
+  }) => Promise<{ original: ArrayBuffer; enhanced: ArrayBuffer }>;
+  enhanceAccept: (params: { voiceId: string; rmsTargetDb?: number; denoise?: boolean }) => Promise<SavedVoice>;
   enhanceReject: () => Promise<void>;
   isEnhanceAvailable: () => Promise<'ready' | 'needs-setup' | 'unavailable'>;
   onEnhanceProgress: (callback: (status: string, details?: Record<string, unknown>) => void) => void;
@@ -111,9 +117,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
   convertToM4a: (wavBuffer: ArrayBuffer) => ipcRenderer.invoke('audio:convert-to-m4a', wavBuffer),
   isM4aAvailable: () => ipcRenderer.invoke('audio:m4a-available'),
   // Voice enhancement
-  enhancePreview: (params: { voiceId?: string; audioData?: ArrayBuffer; denoise: boolean }) =>
-    ipcRenderer.invoke('voice:enhance-preview', params),
-  enhanceAccept: (voiceId: string) => ipcRenderer.invoke('voice:enhance-accept', voiceId),
+  enhancePreview: (params: {
+    voiceId?: string;
+    audioData?: ArrayBuffer;
+    denoise: boolean;
+    rmsTargetDb?: number;
+    useOriginalBackup?: boolean;
+  }) => ipcRenderer.invoke('voice:enhance-preview', params),
+  enhanceAccept: (params: { voiceId: string; rmsTargetDb?: number; denoise?: boolean }) =>
+    ipcRenderer.invoke('voice:enhance-accept', params),
   enhanceReject: () => ipcRenderer.invoke('voice:enhance-reject'),
   isEnhanceAvailable: () => ipcRenderer.invoke('voice:enhance-available'),
   onEnhanceProgress: (callback: (status: string, details?: Record<string, unknown>) => void) => {

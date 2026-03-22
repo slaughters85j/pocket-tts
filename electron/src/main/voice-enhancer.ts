@@ -9,6 +9,7 @@ export interface EnhanceOptions {
   denoise: boolean;
   targetSr?: number; // default 24000
   device?: string; // 'auto' | 'cpu' | 'mps'
+  rmsTargetDb?: number; // RMS normalization baked into the WAV (e.g., -14)
 }
 
 export interface EnhanceResult {
@@ -16,6 +17,9 @@ export interface EnhanceResult {
   outputSr: number;
   device: string;
   denoise: boolean;
+  rmsTargetDb?: number;
+  preRmsDb?: number;
+  postRmsDb?: number;
 }
 
 /** Tri-state: venv ready, script exists but no venv, or completely unavailable */
@@ -276,6 +280,10 @@ export class VoiceEnhancer {
       args.push('--no-denoise');
     }
 
+    if (options.rmsTargetDb !== undefined) {
+      args.push('--rms-target-db', String(options.rmsTargetDb));
+    }
+
     return new Promise<EnhanceResult>((resolve, reject) => {
       const proc = execFile(
         pythonPath,
@@ -325,6 +333,9 @@ export class VoiceEnhancer {
                   outputSr: msg.output_sr ?? result.outputSr,
                   device: msg.device ?? result.device,
                   denoise: msg.denoise ?? result.denoise,
+                  rmsTargetDb: msg.rms_target_db ?? undefined,
+                  preRmsDb: msg.pre_rms_db ?? undefined,
+                  postRmsDb: msg.post_rms_db ?? undefined,
                 };
               }
             } catch {

@@ -39,6 +39,7 @@ interface VoiceSelectorProps {
   savedVoices?: SavedVoice[];
   onDeleteSavedVoice?: (id: string) => void;
   onEnhanceVoice?: (id: string) => void;
+  onEditEnhancement?: (id: string) => void;
   enhanceStatus?: EnhanceStatus;
   onEnhanceStatusChange?: (status: EnhanceStatus) => void;
 }
@@ -51,6 +52,7 @@ export function VoiceSelector({
   savedVoices = [],
   onDeleteSavedVoice,
   onEnhanceVoice,
+  onEditEnhancement,
   enhanceStatus = 'unavailable',
   onEnhanceStatusChange,
 }: VoiceSelectorProps) {
@@ -128,22 +130,37 @@ export function VoiceSelector({
       {selectedVoice.startsWith('saved:') && (
         <div className="mt-2 space-y-2">
           <div className="flex items-center gap-3">
-            {/* Enhanced badge */}
+            {/* Enhanced badge with RMS level */}
             {selectedSavedVoice?.enhanced && (
               <span className="text-xs text-green-400 bg-green-400/10 px-2 py-0.5 rounded-full">
-                Enhanced
+                Enhanced{selectedSavedVoice.audioNormalization?.rmsTargetDb != null
+                  ? ` (${selectedSavedVoice.audioNormalization.rmsTargetDb} dB)`
+                  : ''}
               </span>
             )}
 
-            {/* Enhance button — ready */}
-            {enhanceStatus === 'ready' && onEnhanceVoice && (
-              <button
-                onClick={() => onEnhanceVoice(selectedVoice.replace('saved:', ''))}
-                disabled={disabled}
-                className="text-xs text-accent hover:text-accent-hover transition-colors disabled:opacity-50"
-              >
-                {selectedSavedVoice?.enhanced ? 'Re-enhance' : 'Enhance with LavaSR'}
-              </button>
+            {/* Enhance / Edit Enhancement button — ready */}
+            {enhanceStatus === 'ready' && (
+              <>
+                {selectedSavedVoice?.enhanced && onEditEnhancement && (
+                  <button
+                    onClick={() => onEditEnhancement(selectedVoice.replace('saved:', ''))}
+                    disabled={disabled}
+                    className="text-xs text-accent hover:text-accent-hover transition-colors disabled:opacity-50"
+                  >
+                    Edit Enhancement
+                  </button>
+                )}
+                {onEnhanceVoice && (
+                  <button
+                    onClick={() => onEnhanceVoice(selectedVoice.replace('saved:', ''))}
+                    disabled={disabled}
+                    className="text-xs text-accent hover:text-accent-hover transition-colors disabled:opacity-50"
+                  >
+                    {selectedSavedVoice?.enhanced ? 'Re-enhance' : 'Enhance with LavaSR'}
+                  </button>
+                )}
+              </>
             )}
 
             {/* Enhance button — needs setup */}

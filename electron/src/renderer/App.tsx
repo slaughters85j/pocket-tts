@@ -257,8 +257,17 @@ export default function App() {
     setSelectedVoice('alba');
   }, []);
 
+  const [enhancementEditMode, setEnhancementEditMode] = useState(false);
+
   const handleEnhanceVoice = useCallback((id: string) => {
     setEnhancementTargetVoiceId(id);
+    setEnhancementEditMode(false);
+    setShowEnhancementStudio(true);
+  }, []);
+
+  const handleEditEnhancement = useCallback((id: string) => {
+    setEnhancementTargetVoiceId(id);
+    setEnhancementEditMode(true);
     setShowEnhancementStudio(true);
   }, []);
 
@@ -383,6 +392,7 @@ export default function App() {
             savedVoices={savedVoices}
             onDeleteSavedVoice={handleDeleteSavedVoice}
             onEnhanceVoice={handleEnhanceVoice}
+            onEditEnhancement={handleEditEnhancement}
             enhanceStatus={enhanceStatus}
             onEnhanceStatusChange={setEnhanceStatus}
           />
@@ -463,6 +473,7 @@ export default function App() {
         onClose={() => {
           setShowEnhancementStudio(false);
           setEnhancementTargetVoiceId(null);
+          setEnhancementEditMode(false);
         }}
         voiceId={enhancementTargetVoiceId}
         voiceName={
@@ -471,6 +482,17 @@ export default function App() {
             : null
         }
         onAccepted={handleEnhancementAccepted}
+        editMode={enhancementEditMode}
+        initialDenoise={
+          enhancementEditMode && enhancementTargetVoiceId
+            ? savedVoices.find((v) => v.id === enhancementTargetVoiceId)?.enhanced?.denoise
+            : undefined
+        }
+        initialRmsTargetDb={
+          enhancementEditMode && enhancementTargetVoiceId
+            ? savedVoices.find((v) => v.id === enhancementTargetVoiceId)?.audioNormalization?.rmsTargetDb
+            : undefined
+        }
       />
 
       {/* Pause Insert Modal */}
