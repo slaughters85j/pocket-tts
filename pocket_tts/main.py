@@ -86,7 +86,11 @@ class SpeakerConfig:
     voice_source: str  # predefined name, URL, or "uploaded"
     voice_data: Optional[str] = None  # Base64-encoded WAV if uploaded
     seed: Optional[int] = None
-    rms_target_db: float = -16.0  # Per-voice RMS normalization target
+    rms_target_db: float | int = -16.0  # Per-voice RMS normalization target
+
+    def __post_init__(self):
+        # JSON doesn't distinguish int/float — coerce so beartype is happy downstream
+        self.rms_target_db = float(self.rms_target_db)
 
 
 @dataclass
@@ -430,14 +434,6 @@ def multi_talk_to_speech(
     if backend_manager.switching:
         raise HTTPException(status_code=503, detail="Backend switch in progress, try again shortly")
 
-    # Multi-talk requires pocket-tts backend (voice state crossfade mechanics)
-    if backend_manager.active_name != "pocket-tts":
-        raise HTTPException(
-            status_code=400,
-            detail="Multi-talk is only supported with the pocket-tts backend. "
-            f"Currently active: {backend_manager.active_name}",
-        )
-
     if not script.strip():
         raise HTTPException(status_code=400, detail="Script cannot be empty")
 
@@ -478,14 +474,13 @@ def multi_talk_to_speech(
     if not segments:
         raise HTTPException(status_code=400, detail="Script contains no valid segments")
 
-    # Multi-talk uses the pocket-tts backend directly for voice state access
-    from pocket_tts.models.pocket_tts_backend import PocketTTSBackend
+    active = backend_manager.active
 
-    pocket_backend: PocketTTSBackend = backend_manager.active  # type: ignore[assignment]
-    tts_model = pocket_backend.model
+    # Pre-load voice states for all speakers via backend abstraction.
+    # Track temp files that fish-speech needs kept alive until generation finishes.
+    voice_states: dict[str, Any] = {}
+    temp_files_to_cleanup: list[str] = []
 
-    # Pre-load voice states for all speakers
-    voice_states = {}
     for config in speaker_configs:
         if config.name in voice_states:
             continue  # Already loaded
@@ -500,26 +495,30 @@ def multi_talk_to_speech(
                     detail=f"Invalid base64 voice data for speaker '{config.name}': {e}",
                 )
 
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as temp_file:
-                temp_file.write(wav_bytes)
-                temp_file.flush()
-                try:
-                    voice_states[config.name] = tts_model.get_state_for_audio_prompt(
-                        Path(temp_file.name), truncate=True, target_db=config.rms_target_db
-                    )
-                finally:
-                    os.unlink(temp_file.name)
+            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
+            temp_file.write(wav_bytes)
+            temp_file.flush()
+            temp_file.close()
+
+            voice_states[config.name] = active.get_voice_state(
+                Path(temp_file.name), target_db=config.rms_target_db
+            )
+            # Pocket-tts encodes eagerly; fish-speech reads lazily during generation
+            if active.backend_name == "pocket-tts":
+                os.unlink(temp_file.name)
+            else:
+                temp_files_to_cleanup.append(temp_file.name)
         elif config.voice_source in PREDEFINED_VOICES:
-            voice_states[config.name] = tts_model._cached_get_state_for_audio_prompt(
-                config.voice_source, truncate=True, target_db=config.rms_target_db
+            voice_states[config.name] = active.cached_get_voice_state(
+                config.voice_source, target_db=config.rms_target_db
             )
         elif (
             config.voice_source.startswith("http://")
             or config.voice_source.startswith("https://")
             or config.voice_source.startswith("hf://")
         ):
-            voice_states[config.name] = tts_model._cached_get_state_for_audio_prompt(
-                config.voice_source, truncate=True, target_db=config.rms_target_db
+            voice_states[config.name] = active.cached_get_voice_state(
+                config.voice_source, target_db=config.rms_target_db
             )
         else:
             raise HTTPException(
@@ -528,7 +527,7 @@ def multi_talk_to_speech(
             )
 
     # Generate audio progressively and stream with crossfade
-    sample_rate = tts_model.config.mimi.sample_rate
+    sample_rate = active.sample_rate
     crossfade_samples = int(crossfade_ms * sample_rate / 1000)
 
     # Set up cancellation for client disconnect detection
@@ -555,62 +554,83 @@ def multi_talk_to_speech(
 
     def generate_progressive_wav():
         """Generator that yields WAV data progressively as segments are generated."""
-        # Write WAV header first (with placeholder length)
-        header_buffer = io.BytesIO()
-        wav_header = wave.open(header_buffer, "wb")
-        wav_header.setnchannels(1)  # Mono
-        wav_header.setsampwidth(2)  # 16-bit
-        wav_header.setframerate(sample_rate)
-        wav_header.setnframes(1_000_000_000)  # Placeholder for streaming
-        wav_header.close()
-        header_buffer.seek(0)
-        yield header_buffer.read()
+        try:
+            # Write WAV header first (with placeholder length)
+            header_buffer = io.BytesIO()
+            wav_header = wave.open(header_buffer, "wb")
+            wav_header.setnchannels(1)  # Mono
+            wav_header.setsampwidth(2)  # 16-bit
+            wav_header.setframerate(sample_rate)
+            wav_header.setnframes(1_000_000_000)  # Placeholder for streaming
+            wav_header.close()
+            header_buffer.seek(0)
+            yield header_buffer.read()
 
-        # Track the "tail" from previous segment for crossfading
-        prev_tail = None
+            # Track the "tail" from previous segment for crossfading
+            prev_tail = None
 
-        for i, segment in enumerate(segments):
-            if cancel_event.is_set():
-                logging.info("Multi-TTS generation cancelled at segment %d", i)
-                break
-            state = voice_states[segment.speaker_name]
-            audio = tts_model.generate_audio(model_state=state, text_to_generate=segment.text)
-            audio_np = audio.squeeze().numpy()
+            for i, segment in enumerate(segments):
+                if cancel_event.is_set():
+                    logging.info("Multi-TTS generation cancelled at segment %d", i)
+                    break
 
-            is_last = i == len(segments) - 1
+                state = voice_states[segment.speaker_name]
 
-            if prev_tail is not None and len(prev_tail) > 0 and len(audio_np) >= crossfade_samples:
-                # Apply crossfade with previous segment's tail
-                fade_out = np.linspace(1.0, 0.0, crossfade_samples)
-                fade_in = np.linspace(0.0, 1.0, crossfade_samples)
-                crossfaded = np.clip(
-                    prev_tail * fade_out + audio_np[:crossfade_samples] * fade_in, -1.0, 1.0
-                )
-                # Convert and yield the crossfaded portion
-                crossfaded_int16 = (crossfaded * 32767).astype(np.int16)
-                yield crossfaded_int16.tobytes()
-                # Continue with the rest of this segment (minus crossfade start)
-                audio_np = audio_np[crossfade_samples:]
+                # Collect all chunks from the stream into a single numpy array
+                chunks = []
+                for chunk in active.generate_audio_stream(
+                    voice_state=state, text=segment.text, cancel_event=cancel_event
+                ):
+                    chunks.append(chunk.squeeze().numpy())
+                if not chunks:
+                    continue
+                audio_np = np.concatenate(chunks)
 
-            if is_last:
-                # Last segment: yield everything
-                if len(audio_np) > 0:
-                    audio_int16 = (audio_np * 32767).astype(np.int16)
-                    yield audio_int16.tobytes()
-                prev_tail = None
-            else:
-                # Not last: hold back the tail for crossfading with next segment
-                if len(audio_np) > crossfade_samples:
-                    # Yield everything except the tail
-                    main_part = audio_np[:-crossfade_samples]
-                    audio_int16 = (main_part * 32767).astype(np.int16)
-                    yield audio_int16.tobytes()
-                    prev_tail = audio_np[-crossfade_samples:]
+                is_last = i == len(segments) - 1
+
+                if (
+                    prev_tail is not None
+                    and len(prev_tail) > 0
+                    and len(audio_np) >= crossfade_samples
+                ):
+                    # Apply crossfade with previous segment's tail
+                    fade_out = np.linspace(1.0, 0.0, crossfade_samples)
+                    fade_in = np.linspace(0.0, 1.0, crossfade_samples)
+                    crossfaded = np.clip(
+                        prev_tail * fade_out + audio_np[:crossfade_samples] * fade_in, -1.0, 1.0
+                    )
+                    # Convert and yield the crossfaded portion
+                    crossfaded_int16 = (crossfaded * 32767).astype(np.int16)
+                    yield crossfaded_int16.tobytes()
+                    # Continue with the rest of this segment (minus crossfade start)
+                    audio_np = audio_np[crossfade_samples:]
+
+                if is_last:
+                    # Last segment: yield everything
+                    if len(audio_np) > 0:
+                        audio_int16 = (audio_np * 32767).astype(np.int16)
+                        yield audio_int16.tobytes()
+                    prev_tail = None
                 else:
-                    # Segment too short, just hold it all for crossfade
-                    prev_tail = audio_np
+                    # Not last: hold back the tail for crossfading with next segment
+                    if len(audio_np) > crossfade_samples:
+                        # Yield everything except the tail
+                        main_part = audio_np[:-crossfade_samples]
+                        audio_int16 = (main_part * 32767).astype(np.int16)
+                        yield audio_int16.tobytes()
+                        prev_tail = audio_np[-crossfade_samples:]
+                    else:
+                        # Segment too short, just hold it all for crossfade
+                        prev_tail = audio_np
 
-        cancel_event.set()  # Ensure watchdog stops
+            cancel_event.set()  # Ensure watchdog stops
+        finally:
+            # Clean up temp files that fish-speech needed alive during generation
+            for tmp_path in temp_files_to_cleanup:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
 
     return StreamingResponse(
         generate_progressive_wav(),

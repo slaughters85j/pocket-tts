@@ -11,9 +11,8 @@ import threading
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
-from beartype.typing import Iterator
-
 import torch
+from beartype.typing import Iterator
 
 
 @runtime_checkable
@@ -60,11 +59,7 @@ class TTSBackend(Protocol):
     # Voice state
     # ------------------------------------------------------------------
 
-    def get_voice_state(
-        self,
-        voice_source: str | Path,
-        target_db: float = -16.0,
-    ) -> Any:
+    def get_voice_state(self, voice_source: str | Path, target_db: float | int = -16.0) -> Any:
         """Build a voice-conditioning state from an audio source.
 
         Parameters
@@ -82,9 +77,7 @@ class TTSBackend(Protocol):
         ...
 
     def cached_get_voice_state(
-        self,
-        voice_source: str | Path,
-        target_db: float = -16.0,
+        self, voice_source: str | Path, target_db: float | int = -16.0
     ) -> Any:
         """Like ``get_voice_state`` but with LRU caching."""
         ...
@@ -94,10 +87,7 @@ class TTSBackend(Protocol):
     # ------------------------------------------------------------------
 
     def generate_audio_stream(
-        self,
-        voice_state: Any,
-        text: str,
-        cancel_event: threading.Event | None = None,
+        self, voice_state: Any, text: str, cancel_event: threading.Event | None = None
     ) -> Iterator[torch.Tensor]:
         """Yield PCM audio chunks as 1-D ``torch.Tensor`` (shape ``[samples]``).
 

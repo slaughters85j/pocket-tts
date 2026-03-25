@@ -80,9 +80,9 @@ def _apply_sanitize_patch() -> None:
             remapped: dict = {}
             for key, value in weights.items():
                 if key.startswith("text_model.model."):
-                    new_key = key[len("text_model.model."):]
+                    new_key = key[len("text_model.model.") :]
                 elif key.startswith("audio_decoder."):
-                    suffix = key[len("audio_decoder."):]
+                    suffix = key[len("audio_decoder.") :]
                     if suffix.startswith("codebook_embeddings."):
                         new_key = suffix
                     else:
@@ -183,9 +183,7 @@ class FishSpeechBackend:
     # ------------------------------------------------------------------
 
     def get_voice_state(
-        self,
-        voice_source: str | Path,
-        target_db: float = -16.0,
+        self, voice_source: str | Path, target_db: float | int = -16.0
     ) -> FishVoiceState:
         """Build voice state from a WAV path or predefined name.
 
@@ -209,8 +207,7 @@ class FishSpeechBackend:
         # URL voices aren't supported by fish-speech (needs local file)
         if source_str.startswith(("http://", "https://", "hf://")):
             logger.warning(
-                "URL voice '%s' not supported by fish-speech — using default voice",
-                source_str,
+                "URL voice '%s' not supported by fish-speech — using default voice", source_str
             )
             return FishVoiceState()
 
@@ -223,9 +220,7 @@ class FishSpeechBackend:
         return FishVoiceState()
 
     def cached_get_voice_state(
-        self,
-        voice_source: str | Path,
-        target_db: float = -16.0,
+        self, voice_source: str | Path, target_db: float | int = -16.0
     ) -> FishVoiceState:
         """Cached version of ``get_voice_state``.
 
@@ -234,7 +229,9 @@ class FishSpeechBackend:
         return self._cached_get_voice_state(str(voice_source), target_db)
 
     @lru_cache(maxsize=4)
-    def _cached_get_voice_state(self, voice_source_str: str, target_db: float) -> FishVoiceState:
+    def _cached_get_voice_state(
+        self, voice_source_str: str, target_db: float | int
+    ) -> FishVoiceState:
         return self.get_voice_state(voice_source_str, target_db)
 
     # ------------------------------------------------------------------
@@ -242,20 +239,49 @@ class FishSpeechBackend:
     # ------------------------------------------------------------------
 
     def generate_audio_stream(
-        self,
-        voice_state: Any,
-        text: str,
-        cancel_event: threading.Event | None = None,
+        self, voice_state: Any, text: str, cancel_event: threading.Event | None = None
     ) -> Iterator[torch.Tensor]:
         """Yield audio chunks as ``torch.Tensor`` (1-D, float32).
 
         Each yield is one batch/segment worth of audio (segment-level
         streaming).  For short text this may be a single yield; for longer
         text the model splits into sentence batches automatically.
+
+        Handles pocket-tts ``[Xs]`` pause markers by splitting text into
+        segments and inserting silence between them.
         """
         if self._model is None:
             raise RuntimeError("Backend not loaded — call load() first")
 
+        from pocket_tts.text_normalizer import parse_pause_markers
+
+        # Split on [Xs] pause markers first
+        segments = parse_pause_markers(text)
+
+        for segment in segments:
+            if cancel_event is not None and cancel_event.is_set():
+                logger.info("fish-speech generation cancelled")
+                return
+
+            # Pause marker → yield silence
+            if isinstance(segment, float):
+                silence_samples = int(segment * self.sample_rate)
+                if silence_samples > 0:
+                    logger.info("fish-speech inserting %.1fs silence", segment)
+                    yield torch.zeros(silence_samples, dtype=torch.float32)
+                continue
+
+            # Text segment → generate audio
+            segment_text = segment.strip()
+            if not segment_text:
+                continue
+
+            yield from self._generate_text_segment(segment_text, voice_state, cancel_event)
+
+    def _generate_text_segment(
+        self, text: str, voice_state: Any, cancel_event: threading.Event | None = None
+    ) -> Iterator[torch.Tensor]:
+        """Generate audio for a single text segment (no pause markers)."""
         import mlx.core as mx
 
         # Resolve ref_audio to mx.array if voice cloning requested
@@ -269,7 +295,6 @@ class FishSpeechBackend:
             )
             ref_text = voice_state.ref_text
 
-        # model.generate() is a generator yielding GenerationResult per batch
         gen_kwargs: dict[str, Any] = {
             "text": text,
             "ref_audio": ref_audio_mx,
@@ -283,7 +308,6 @@ class FishSpeechBackend:
         logger.info("fish-speech generating: %.60s%s", text, "..." if len(text) > 60 else "")
 
         for result in self._model.generate(**gen_kwargs):
-            # Check cancellation between segments
             if cancel_event is not None and cancel_event.is_set():
                 logger.info("fish-speech generation cancelled")
                 return

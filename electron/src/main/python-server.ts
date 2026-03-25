@@ -125,7 +125,7 @@ export class PythonServer {
     });
   }
 
-  private async waitForReady(timeout = 30000): Promise<void> {
+  private async waitForReady(timeout = 60000): Promise<void> {
     const startTime = Date.now();
     const healthUrl = `http://localhost:${this.port}/health`;
 

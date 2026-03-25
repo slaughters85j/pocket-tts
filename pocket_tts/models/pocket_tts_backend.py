@@ -13,10 +13,7 @@ from typing import Any, Iterator
 
 import torch
 
-from pocket_tts.default_parameters import (
-    DEFAULT_EOS_THRESHOLD,
-    DEFAULT_VARIANT,
-)
+from pocket_tts.default_parameters import DEFAULT_EOS_THRESHOLD, DEFAULT_VARIANT
 from pocket_tts.models.tts_model import TTSModel
 from pocket_tts.utils.utils import PREDEFINED_VOICES
 
@@ -82,35 +79,26 @@ class PocketTTSBackend:
     # Voice state
     # ------------------------------------------------------------------
 
-    def get_voice_state(
-        self,
-        voice_source: str | Path,
-        target_db: float = -16.0,
-    ) -> dict:
+    def get_voice_state(self, voice_source: str | Path, target_db: float | int = -16.0) -> dict:
         """Build voice state from a predefined name, path, or URL."""
         if self._model is None:
             raise RuntimeError("Backend not loaded — call load() first")
         return self._model.get_state_for_audio_prompt(
-            voice_source, truncate=True, target_db=target_db
+            voice_source, truncate=True, target_db=float(target_db)
         )
 
     def cached_get_voice_state(
-        self,
-        voice_source: str | Path,
-        target_db: float = -16.0,
+        self, voice_source: str | Path, target_db: float | int = -16.0
     ) -> dict:
         """Like ``get_voice_state`` but with LRU caching (maxsize=4)."""
         if self._model is None:
             raise RuntimeError("Backend not loaded — call load() first")
         return self._model._cached_get_state_for_audio_prompt(
-            voice_source, truncate=True, target_db=target_db
+            voice_source, truncate=True, target_db=float(target_db)
         )
 
     def generate_audio_stream(
-        self,
-        voice_state: Any,
-        text: str,
-        cancel_event: threading.Event | None = None,
+        self, voice_state: Any, text: str, cancel_event: threading.Event | None = None
     ) -> Iterator[torch.Tensor]:
         """Yield 80 ms PCM audio chunks at 24 kHz.
 
@@ -119,9 +107,7 @@ class PocketTTSBackend:
         if self._model is None:
             raise RuntimeError("Backend not loaded — call load() first")
         yield from self._model.generate_audio_stream(
-            model_state=voice_state,
-            text_to_generate=text,
-            cancel_event=cancel_event,
+            model_state=voice_state, text_to_generate=text, cancel_event=cancel_event
         )
 
     # ------------------------------------------------------------------
