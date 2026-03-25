@@ -53,6 +53,7 @@ export interface ElectronAPI {
   onTTSComplete: (callback: () => void) => void;
   onTTSCancelled: (callback: () => void) => void;
   onTTSError: (callback: (error: string) => void) => void;
+  onTTSStatus: (callback: (message: string) => void) => void;
   removeAllListeners: () => void;
   // Voice management
   saveVoice: (params: { name: string; description: string; audioData: ArrayBuffer }) => Promise<SavedVoice>;
@@ -103,11 +104,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onTTSError: (callback: (error: string) => void) => {
     ipcRenderer.on('tts:error', (_event, error) => callback(error));
   },
+  onTTSStatus: (callback: (message: string) => void) => {
+    ipcRenderer.on('tts:status', (_event, message) => callback(message));
+  },
   removeAllListeners: () => {
     ipcRenderer.removeAllListeners('tts:chunk');
     ipcRenderer.removeAllListeners('tts:complete');
     ipcRenderer.removeAllListeners('tts:cancelled');
     ipcRenderer.removeAllListeners('tts:error');
+    ipcRenderer.removeAllListeners('tts:status');
   },
   // Voice management
   saveVoice: (params: { name: string; description: string; audioData: ArrayBuffer }) =>

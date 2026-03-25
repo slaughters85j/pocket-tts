@@ -51,6 +51,7 @@ export interface ElectronAPI {
   onTTSComplete: (callback: () => void) => void;
   onTTSCancelled: (callback: () => void) => void;
   onTTSError: (callback: (error: string) => void) => void;
+  onTTSStatus: (callback: (message: string) => void) => void;
   removeAllListeners: () => void;
   // Voice management
   saveVoice: (params: { name: string; description: string; audioData: ArrayBuffer }) => Promise<SavedVoice>;

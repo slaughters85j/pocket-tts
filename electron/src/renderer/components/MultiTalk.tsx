@@ -10,7 +10,7 @@ import { addToHistory } from './History';
 import { PauseModal } from './PauseModal';
 import { BackendSelector, BackendInfo } from './BackendSelector';
 
-interface MultiTalkConfig {
+interface MultiTalkExportConfig {
   version: string;
   speakers: {
     name: string;
@@ -404,7 +404,7 @@ export function MultiTalk({ pendingConfig, onConfigLoaded, onBackendChange }: Mu
   }, []);
 
   const handleExport = useCallback(() => {
-    const config: MultiTalkConfig = {
+    const config: MultiTalkExportConfig = {
       version: '1.0',
       speakers: speakers.map((s) => ({
         name: s.name,
@@ -444,7 +444,7 @@ export function MultiTalk({ pendingConfig, onConfigLoaded, onBackendChange }: Mu
         try {
           const config = JSON.parse(
             event.target?.result as string
-          ) as MultiTalkConfig;
+          ) as MultiTalkExportConfig;
 
           // Convert config speakers to UI speakers
           const newSpeakers: Speaker[] = config.speakers.map((s) => {

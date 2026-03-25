@@ -263,6 +263,43 @@ async def switch_backend(request: starlette_requests.Request):
         raise HTTPException(status_code=500, detail=f"Failed to switch backend: {e}")
 
 
+@web_app.get("/transcript-status")
+def transcript_status(voice_path: str):
+    """Check if a Whisper transcript is cached for a voice file."""
+    from pocket_tts.utils.transcript_cache import get_transcript
+
+    path = Path(voice_path)
+    if not path.exists():
+        return {"cached": False, "reason": "file_not_found"}
+    transcript = get_transcript(path)
+    return {"cached": transcript is not None}
+
+
+@web_app.post("/transcribe-voice")
+def transcribe_voice(voice_wav: UploadFile = File(...)):
+    """Pre-transcribe a voice WAV file so fish-speech doesn't run Whisper at generation time.
+
+    This is a fire-and-forget optimisation — if it fails, the fish-speech backend
+    will transparently transcribe on first use via a cache-miss path.
+    """
+    from pocket_tts.utils.transcript_cache import get_transcript, transcribe_and_cache
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as temp_file:
+        content = voice_wav.file.read()
+        temp_file.write(content)
+        temp_file.flush()
+        temp_file.close()
+
+        try:
+            wav_path = Path(temp_file.name)
+            transcript = get_transcript(wav_path)
+            if transcript is None:
+                transcript = transcribe_and_cache(wav_path)
+            return {"transcript": transcript, "cached": True}
+        finally:
+            os.unlink(temp_file.name)
+
+
 def write_to_queue(queue, text_to_generate, voice_state, cancel_event=None):
     """Allows writing to the StreamingResponse as if it were a file."""
 

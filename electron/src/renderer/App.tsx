@@ -22,6 +22,7 @@ interface GenerationState {
   timeToFirstAudio: number | null;
   totalTime: number | null;
   error: string | null;
+  statusMessage?: string | null;
 }
 
 export default function App() {
@@ -79,6 +80,7 @@ export default function App() {
       timeToFirstAudio: null,
       totalTime: null,
       error: null,
+      statusMessage: null,
     });
     setAudioBlob(null);
     setIsPaused(false);
@@ -148,6 +150,13 @@ export default function App() {
         ...prev,
         status: 'error',
         error,
+      }));
+    });
+
+    window.electronAPI.onTTSStatus?.((message) => {
+      setGenerationState((prev) => ({
+        ...prev,
+        statusMessage: message,
       }));
     });
 
@@ -431,6 +440,7 @@ export default function App() {
                   totalTime={generationState.totalTime}
                   error={generationState.error}
                   isPaused={isPaused}
+                  statusMessage={generationState.statusMessage}
                 />
 
                 {/* Audio Player */}

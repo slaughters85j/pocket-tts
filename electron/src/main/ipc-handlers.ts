@@ -69,6 +69,35 @@ export function registerIpcHandlers(
           const buffer = fs.readFileSync(filePath);
           const blob = new Blob([buffer], { type: 'audio/wav' });
           formData.append('voice_wav', blob, 'voice.wav');
+
+          // Check if fish-speech needs a one-time Whisper transcription for this voice
+          try {
+            const backendsRes = await fetch(`http://localhost:${pythonServer.port}/backends`);
+            const backends = await backendsRes.json();
+            if (backends.active === 'fish-speech') {
+              const statusRes = await fetch(
+                `http://localhost:${pythonServer.port}/transcript-status?voice_path=${encodeURIComponent(filePath)}`
+              );
+              const status = await statusRes.json();
+              if (!status.cached && !sender.isDestroyed()) {
+                // Read voice name from metadata for a friendly message
+                const voicesPath = path.join(
+                  os.homedir(), 'Library', 'Application Support', 'pocket-tts-electron', 'voices.json'
+                );
+                let voiceName = savedVoiceId;
+                try {
+                  if (fs.existsSync(voicesPath)) {
+                    const voicesData = JSON.parse(fs.readFileSync(voicesPath, 'utf-8'));
+                    const voice = voicesData.voices?.find((v: { id: string; name: string }) => v.id === savedVoiceId);
+                    if (voice?.name) voiceName = voice.name;
+                  }
+                } catch { /* fall back to ID */ }
+                sender.send('tts:status',
+                  `Capturing '${voiceName}' transcript with Whisper — needed once per voice, not on subsequent runs`
+                );
+              }
+            }
+          } catch { /* non-critical — generation proceeds regardless */ }
         } else {
           throw new Error('Saved voice file not found');
         }
