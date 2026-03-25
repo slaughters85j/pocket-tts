@@ -26,7 +26,7 @@ class VoiceManager: ObservableObject {
         print("Loaded \(customVoices.count) custom voices")
         allVoices.append(contentsOf: customVoices)
 
-        self.voices = allVoices
+        self.voices = allVoices.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
         print("Total voices: \(self.voices.count)")
     }
 

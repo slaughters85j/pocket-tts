@@ -112,7 +112,7 @@ export function SpeakerCard({
               ${disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
           >
             <optgroup label="Built-in Voices">
-              {PREDEFINED_VOICES.map((v) => (
+              {[...PREDEFINED_VOICES].sort((a, b) => a.name.localeCompare(b.name)).map((v) => (
                 <option key={v.id} value={v.id}>
                   {v.name} - {v.description}
                 </option>
@@ -120,7 +120,7 @@ export function SpeakerCard({
             </optgroup>
             {savedVoices.length > 0 && (
               <optgroup label="My Saved Voices">
-                {savedVoices.map((v) => (
+                {[...savedVoices].sort((a, b) => a.name.localeCompare(b.name)).map((v) => (
                   <option key={`saved:${v.id}`} value={`saved:${v.id}`}>
                     {v.enhanced ? '\u2728 ' : ''}{v.name}{v.description ? ` - ${v.description}` : ''}
                   </option>

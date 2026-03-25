@@ -101,7 +101,7 @@ export function VoiceSelector({
           ${disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
       >
         <optgroup label="Built-in Voices">
-          {PREDEFINED_VOICES.map((voice) => (
+          {[...PREDEFINED_VOICES].sort((a, b) => a.name.localeCompare(b.name)).map((voice) => (
             <option key={voice.id} value={voice.id}>
               {voice.name} - {voice.description}
             </option>
@@ -109,7 +109,7 @@ export function VoiceSelector({
         </optgroup>
         {savedVoices.length > 0 && (
           <optgroup label="My Saved Voices">
-            {savedVoices.map((voice) => (
+            {[...savedVoices].sort((a, b) => a.name.localeCompare(b.name)).map((voice) => (
               <option key={`saved:${voice.id}`} value={`saved:${voice.id}`}>
                 {voice.enhanced ? '\u2728 ' : ''}{voice.name}{voice.description ? ` - ${voice.description}` : ''}
               </option>
