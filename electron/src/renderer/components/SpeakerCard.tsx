@@ -65,18 +65,18 @@ export function SpeakerCard({
 
   return (
     <div className="bg-bg-tertiary rounded-lg p-4 border border-border-color">
-      <div className="flex justify-between items-start mb-3">
-        <div className="flex items-center gap-2">
-          <input
-            type="text"
-            value={speaker.name}
-            onChange={(e) => onUpdate({ name: e.target.value })}
-            placeholder="Speaker Name"
-            disabled={disabled}
-            className={`bg-transparent text-text-primary font-medium border-b border-transparent
-              hover:border-border-color focus:border-accent focus:outline-none
-              ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`}
-          />
+      <div className="flex justify-between items-center mb-3">
+        <input
+          type="text"
+          value={speaker.name}
+          onChange={(e) => onUpdate({ name: e.target.value })}
+          placeholder="Speaker Name"
+          disabled={disabled}
+          className={`bg-transparent text-text-primary font-medium border-b border-transparent
+            hover:border-border-color focus:border-accent focus:outline-none
+            ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`}
+        />
+        <div className="flex items-center gap-3">
           <button
             onClick={() => onInsertToScript(speaker.name)}
             disabled={disabled || !speaker.name.trim()}
@@ -87,17 +87,17 @@ export function SpeakerCard({
           >
             <span className="text-white text-xs font-bold leading-none">+</span>
           </button>
+          {canRemove && (
+            <button
+              onClick={onRemove}
+              disabled={disabled}
+              className={`text-red-400 text-sm hover:text-red-300 transition-colors
+                ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`}
+            >
+              Remove
+            </button>
+          )}
         </div>
-        {canRemove && (
-          <button
-            onClick={onRemove}
-            disabled={disabled}
-            className={`text-red-400 text-sm hover:text-red-300 transition-colors
-              ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`}
-          >
-            Remove
-          </button>
-        )}
       </div>
 
       <div className="grid grid-cols-2 gap-3">
