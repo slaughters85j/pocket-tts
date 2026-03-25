@@ -13,7 +13,7 @@ import wave
 from dataclasses import dataclass
 from pathlib import Path
 from queue import Queue
-from typing import Optional
+from typing import Any, Optional
 
 import numpy as np
 import typer
@@ -28,6 +28,7 @@ from typing_extensions import Annotated
 from pocket_tts.data.audio import stream_audio_chunks
 from pocket_tts.default_parameters import (
     DEFAULT_AUDIO_PROMPT,
+    DEFAULT_BACKEND,
     DEFAULT_EOS_THRESHOLD,
     DEFAULT_FRAMES_AFTER_EOS,
     DEFAULT_LSD_DECODE_STEPS,
@@ -35,9 +36,10 @@ from pocket_tts.default_parameters import (
     DEFAULT_TEMPERATURE,
     DEFAULT_VARIANT,
 )
+from pocket_tts.models.backend_registry import BackendManager, get_available_backends
 from pocket_tts.models.tts_model import TTSModel
 from pocket_tts.utils.logging_utils import enable_logging
-from pocket_tts.utils.utils import PREDEFINED_VOICES, size_of_dict
+from pocket_tts.utils.utils import PREDEFINED_VOICES
 
 logger = logging.getLogger(__name__)
 
@@ -180,9 +182,8 @@ def apply_crossfade(audio1: np.ndarray, audio2: np.ndarray, crossfade_samples: i
 # The pocket-tts server implementation
 # ------------------------------------------------------
 
-# Global model instance
-tts_model = None
-global_model_state = None
+# Global backend manager — replaces the old tts_model / global_model_state globals
+backend_manager = BackendManager()
 
 web_app = FastAPI(
     title="Kyutai Pocket TTS API",
@@ -211,10 +212,54 @@ async def root():
 
 @web_app.get("/health")
 async def health():
-    return {"status": "healthy"}
+    return {"status": "healthy", "backend": backend_manager.active_name}
 
 
-def write_to_queue(queue, text_to_generate, model_state, cancel_event=None):
+@web_app.get("/backends")
+async def list_backends():
+    """Return available and active backend info."""
+    active = backend_manager.active if backend_manager.active_name else None
+    return {
+        "available": get_available_backends(),
+        "active": backend_manager.active_name,
+        "supports_tags": getattr(active, "supports_tags", False) if active else False,
+    }
+
+
+@web_app.post("/switch-backend")
+async def switch_backend(request: starlette_requests.Request):
+    """Switch the active TTS backend at runtime.
+
+    Expects JSON body: ``{"backend": "pocket-tts" | "fish-speech"}``.
+    """
+    if backend_manager.switching:
+        raise HTTPException(status_code=503, detail="Backend switch already in progress")
+
+    body = await request.json()
+    name = body.get("backend")
+    if not name:
+        raise HTTPException(status_code=400, detail="Missing 'backend' field")
+
+    available = get_available_backends()
+    if name not in available:
+        raise HTTPException(
+            status_code=400, detail=f"Unknown backend: {name!r}. Available: {available}"
+        )
+
+    if name == backend_manager.active_name:
+        return {"status": "ok", "message": f"{name} is already active"}
+
+    try:
+        load_kwargs: dict = {}
+        if name == "pocket-tts":
+            load_kwargs["voice"] = DEFAULT_AUDIO_PROMPT
+        backend_manager.activate(name, **load_kwargs)
+        return {"status": "ok", "backend": name}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to switch backend: {e}")
+
+
+def write_to_queue(queue, text_to_generate, voice_state, cancel_event=None):
     """Allows writing to the StreamingResponse as if it were a file."""
 
     class FileLikeToQueue(io.IOBase):
@@ -230,14 +275,15 @@ def write_to_queue(queue, text_to_generate, model_state, cancel_event=None):
         def close(self):
             self.queue.put(None)
 
-    audio_chunks = tts_model.generate_audio_stream(
-        model_state=model_state, text_to_generate=text_to_generate, cancel_event=cancel_event
+    active = backend_manager.active
+    audio_chunks = active.generate_audio_stream(
+        voice_state=voice_state, text=text_to_generate, cancel_event=cancel_event
     )
-    stream_audio_chunks(FileLikeToQueue(queue), audio_chunks, tts_model.config.mimi.sample_rate)
+    stream_audio_chunks(FileLikeToQueue(queue), audio_chunks, active.sample_rate)
 
 
 def generate_data_with_state(
-    text_to_generate: str, model_state: dict, request: starlette_requests.Request | None = None
+    text_to_generate: str, voice_state: Any, request: starlette_requests.Request | None = None
 ):
     queue = Queue()
     cancel_event = threading.Event()
@@ -268,7 +314,7 @@ def generate_data_with_state(
 
     # Run generation in a thread
     thread = threading.Thread(
-        target=write_to_queue, args=(queue, text_to_generate, model_state, cancel_event)
+        target=write_to_queue, args=(queue, text_to_generate, voice_state, cancel_event)
     )
     thread.start()
 
@@ -300,13 +346,18 @@ def text_to_speech(
         voice_wav: Optional uploaded voice file (mutually exclusive with voice_url)
         rms_target_db: RMS normalization target in dB (-30 to -6). Controls voice loudness.
     """
+    if backend_manager.switching:
+        raise HTTPException(status_code=503, detail="Backend switch in progress, try again shortly")
+
     if not text.strip():
         raise HTTPException(status_code=400, detail="Text cannot be empty")
 
     if voice_url is not None and voice_wav is not None:
         raise HTTPException(status_code=400, detail="Cannot provide both voice_url and voice_wav")
 
-    # Use the appropriate model state
+    active = backend_manager.active
+
+    # Use the appropriate voice state
     if voice_url is not None:
         if not (
             voice_url.startswith("http://")
@@ -317,29 +368,41 @@ def text_to_speech(
             raise HTTPException(
                 status_code=400, detail="voice_url must start with http://, https://, or hf://"
             )
-        model_state = tts_model._cached_get_state_for_audio_prompt(
-            voice_url, truncate=True, target_db=rms_target_db
-        )
+        voice_state = active.cached_get_voice_state(voice_url, target_db=rms_target_db)
         logging.warning("Using voice from URL: %s", voice_url)
     elif voice_wav is not None:
-        # Use uploaded voice file
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as temp_file:
+        # Use uploaded voice file.
+        # For fish-speech the voice state is just the file path (read lazily during
+        # generation), so we must NOT delete the temp file here.  For pocket-tts the
+        # audio is encoded eagerly into hidden-state tensors, so immediate deletion
+        # is fine.  We use delete=False and let the OS clean up /tmp on reboot for
+        # the fish-speech case.
+        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
+        try:
             content = voice_wav.file.read()
             temp_file.write(content)
             temp_file.flush()
+            temp_file.close()
 
-            try:
-                model_state = tts_model.get_state_for_audio_prompt(
-                    Path(temp_file.name), truncate=True, target_db=rms_target_db
-                )
-            finally:
+            voice_state = active.get_voice_state(Path(temp_file.name), target_db=rms_target_db)
+
+            # Pocket-tts encodes eagerly — safe to delete now.
+            # Fish-speech stores the path for lazy read — keep the file.
+            if active.backend_name == "pocket-tts":
                 os.unlink(temp_file.name)
+        except Exception:
+            # Clean up on error regardless of backend
+            try:
+                os.unlink(temp_file.name)
+            except OSError:
+                pass
+            raise
     else:
-        # Use default global model state
-        model_state = global_model_state
+        # Use default voice state
+        voice_state = backend_manager.default_voice_state
 
     return StreamingResponse(
-        generate_data_with_state(text, model_state, request=request),
+        generate_data_with_state(text, voice_state, request=request),
         media_type="audio/wav",
         headers={
             "Content-Disposition": "attachment; filename=generated_speech.wav",
@@ -363,6 +426,17 @@ def multi_talk_to_speech(
         speakers: JSON array of speaker configs
         crossfade_ms: Crossfade duration between segments in milliseconds
     """
+
+    if backend_manager.switching:
+        raise HTTPException(status_code=503, detail="Backend switch in progress, try again shortly")
+
+    # Multi-talk requires pocket-tts backend (voice state crossfade mechanics)
+    if backend_manager.active_name != "pocket-tts":
+        raise HTTPException(
+            status_code=400,
+            detail="Multi-talk is only supported with the pocket-tts backend. "
+            f"Currently active: {backend_manager.active_name}",
+        )
 
     if not script.strip():
         raise HTTPException(status_code=400, detail="Script cannot be empty")
@@ -404,6 +478,12 @@ def multi_talk_to_speech(
     if not segments:
         raise HTTPException(status_code=400, detail="Script contains no valid segments")
 
+    # Multi-talk uses the pocket-tts backend directly for voice state access
+    from pocket_tts.models.pocket_tts_backend import PocketTTSBackend
+
+    pocket_backend: PocketTTSBackend = backend_manager.active  # type: ignore[assignment]
+    tts_model = pocket_backend.model
+
     # Pre-load voice states for all speakers
     voice_states = {}
     for config in speaker_configs:
@@ -425,9 +505,7 @@ def multi_talk_to_speech(
                 temp_file.flush()
                 try:
                     voice_states[config.name] = tts_model.get_state_for_audio_prompt(
-                        Path(temp_file.name),
-                        truncate=True,
-                        target_db=config.rms_target_db,
+                        Path(temp_file.name), truncate=True, target_db=config.rms_target_db
                     )
                 finally:
                     os.unlink(temp_file.name)
@@ -555,15 +633,22 @@ def serve(
     eos_threshold: Annotated[
         float, typer.Option(help="EOS threshold (more negative = harder to trigger EOS)")
     ] = DEFAULT_EOS_THRESHOLD,
+    model: Annotated[
+        str, typer.Option(help="TTS backend to use (pocket-tts or fish-speech)")
+    ] = DEFAULT_BACKEND,
 ):
     """Start the FastAPI server."""
 
-    global tts_model, global_model_state
-    tts_model = TTSModel.load_model(DEFAULT_VARIANT, eos_threshold=eos_threshold)
+    available = get_available_backends()
+    if model not in available:
+        logger.error("Backend %r not available. Available: %s", model, available)
+        raise typer.Exit(code=1)
 
-    # Pre-load the voice prompt
-    global_model_state = tts_model.get_state_for_audio_prompt(voice)
-    logger.info(f"The size of the model state is {size_of_dict(global_model_state) // 1e6} MB")
+    load_kwargs: dict[str, Any] = {}
+    if model == "pocket-tts":
+        load_kwargs["voice"] = voice
+        load_kwargs["eos_threshold"] = eos_threshold
+    backend_manager.activate(model, **load_kwargs)
 
     uvicorn.run("pocket_tts.main:web_app", host=host, port=port, reload=reload)
 

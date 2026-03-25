@@ -10,6 +10,7 @@ import { SaveVoiceModal } from './components/SaveVoiceModal';
 import { EnhancementStudio } from './components/EnhancementStudio';
 import { MultiTalk, MultiTalkConfig } from './components/MultiTalk';
 import { History, HistoryEntry, addToHistory } from './components/History';
+import { BackendSelector, BackendInfo } from './components/BackendSelector';
 import { StreamingWavPlayer } from './lib/streaming-wav-player';
 import './types/electron.d.ts';
 
@@ -44,6 +45,11 @@ export default function App() {
   const [showEnhancementStudio, setShowEnhancementStudio] = useState(false);
   const [enhancementTargetVoiceId, setEnhancementTargetVoiceId] = useState<string | null>(null);
   const [enhanceStatus, setEnhanceStatus] = useState<'ready' | 'needs-setup' | 'unavailable'>('unavailable');
+  const [backendInfo, setBackendInfo] = useState<BackendInfo>({
+    available: ['pocket-tts'],
+    active: 'pocket-tts',
+    supports_tags: false,
+  });
 
   const [isPaused, setIsPaused] = useState(false);
 
@@ -336,6 +342,14 @@ export default function App() {
           </p>
         </div>
 
+        {/* Backend Selector (only shown when multiple backends available) */}
+        <div className="mb-6">
+          <BackendSelector
+            disabled={isGenerating}
+            onBackendChange={setBackendInfo}
+          />
+        </div>
+
         {/* Tab Navigation */}
         <div className="flex border-b border-border-color mb-6">
           <button
@@ -395,6 +409,7 @@ export default function App() {
             onEditEnhancement={handleEditEnhancement}
             enhanceStatus={enhanceStatus}
             onEnhanceStatusChange={setEnhanceStatus}
+            hidePredefinedVoices={backendInfo.active === 'fish-speech'}
           />
         </div>
 
@@ -442,10 +457,21 @@ export default function App() {
 
         {/* Multi-Talk Tab */}
         {activeTab === 'multi' && (
-          <MultiTalk
-            pendingConfig={pendingMultiConfig}
-            onConfigLoaded={handleMultiConfigLoaded}
-          />
+          backendInfo.active === 'fish-speech' ? (
+            <div className="bg-bg-secondary rounded-lg p-6 text-center">
+              <p className="text-text-secondary text-sm">
+                Multi-Talk is not available with Fish Audio S2 Pro.
+              </p>
+              <p className="text-text-secondary text-xs mt-2">
+                Switch to Pocket TTS to use multi-speaker dialogue.
+              </p>
+            </div>
+          ) : (
+            <MultiTalk
+              pendingConfig={pendingMultiConfig}
+              onConfigLoaded={handleMultiConfigLoaded}
+            />
+          )
         )}
 
         {/* History Tab */}

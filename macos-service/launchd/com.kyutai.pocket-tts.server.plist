@@ -17,6 +17,8 @@
         <string>8765</string>
         <string>--host</string>
         <string>127.0.0.1</string>
+        <string>--model</string>
+        <string>{{MODEL_BACKEND}}</string>
     </array>
 
     <!-- Working directory (project root) -->

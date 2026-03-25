@@ -32,6 +32,9 @@ dev = [
     "pytest>=9.0.2",
     "pytest-xdist>=3.8.0",
 ]
+mlx = [
+    "mlx-audio>=0.4.1",
+]
 
 
 [tool.uv.sources]

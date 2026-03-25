@@ -44,4 +44,11 @@ enum Constants {
 
     // Config version
     static let configVersion = "1.0.0"
+
+    // Backend selection
+    static let defaultBackend = "pocket-tts"
+    static let availableBackends: [(id: String, label: String)] = [
+        ("pocket-tts", "Pocket TTS (100M, CPU)"),
+        ("fish-speech", "Fish Audio S2 Pro (5B, MLX)"),
+    ]
 }

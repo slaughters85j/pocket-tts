@@ -17,6 +17,7 @@ A macOS-native fork of [Kyutai's Pocket TTS](https://github.com/kyutai-labs/pock
 | **LaunchAgent** | Auto-starts the TTS server on login (port 8765) |
 | **Text Normalizer** | Numbers, currencies, abbreviations, acronyms, ISR/radar terms → speakable words |
 | **Pause/Resume/Stop** | Client-side audio controls + server-side cancellation |
+| **Fish Audio S2 Pro** | Alternate 5B-parameter TTS backend via MLX — selectable from Electron, Menu Bar, and Quick Action |
 
 ## Screenshots
 
@@ -46,6 +47,9 @@ https://github.com/user-attachments/assets/20c9442f-549c-4d97-aa9b-f0b8b75218fb
 git clone https://github.com/slaughters85j/pocket-tts.git
 cd pocket-tts
 uv pip install -e .
+
+# 1b. Optional: enable Fish Audio S2 Pro backend (Apple Silicon only)
+uv sync --group mlx
 
 # 2. Run the Electron app in dev mode
 cd electron && npm install && npm run dev
@@ -141,6 +145,42 @@ No external scripts or manual venv management required — it just works.
   <img src="Assets/enhance-tuning.jpeg" alt="Enhancement Studio — tuning controls" width="625" /><br/>
   <img src="Assets/enhanced-voice-preview.jpeg" alt="A/B preview of enhanced voice" width="625" />
 </p>
+
+## Fish Audio S2 Pro Backend
+
+An alternate TTS backend using [Fish Audio S2 Pro](https://huggingface.co/mlx-community/fish-audio-s2-pro-8bit) (5B params, MLX 8-bit quantized). Requires Apple Silicon.
+
+### Setup
+
+```bash
+uv sync --group mlx
+```
+
+This installs `mlx-audio` as an optional dependency. The rebuild script (`scripts/rebuild-all.sh`) does this automatically on Apple Silicon.
+
+### Usage
+
+Once installed, a **Model** dropdown appears in the Electron app (and a **Select Model** submenu in the Menu Bar app). Switch between:
+
+- **Pocket TTS (100M, CPU)** — fast, lightweight, built-in voices
+- **Fish Audio S2 Pro (5B, MLX)** — higher quality, 80+ languages, inline `[tag]` emotion/prosody control
+
+Only one model is loaded at a time. Switching unloads the current model and loads the new one (~10-15s for fish-speech).
+
+### Inline Tags
+
+Fish Audio S2 Pro supports 15,000+ inline tags for fine-grained control:
+
+```
+[whisper]This is a secret. [excited]And this is exciting!
+[warm and reassuring tone]Everything will be fine.
+```
+
+### Limitations
+
+- Voice cloning uses custom WAV files only — predefined pocket-tts voices (Alba, etc.) are not available with this backend.
+- Multi-Talk mode is pocket-tts only.
+- Model weights (~6.7 GB) download from HuggingFace on first use.
 
 ## macOS Quick Action
 

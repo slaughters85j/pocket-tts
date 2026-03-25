@@ -79,6 +79,9 @@ export interface ElectronAPI {
   onSetupProgress: (callback: (status: string, details?: Record<string, unknown>) => void) => void;
   // Audio normalization per-voice
   updateVoiceNormalization: (params: { voiceId: string; rmsTargetDb: number; denoise: boolean }) => Promise<SavedVoice>;
+  // Backend management
+  getBackends: () => Promise<{ available: string[]; active: string | null; supports_tags: boolean }>;
+  switchBackend: (name: string) => Promise<{ status: string; backend?: string; message?: string }>;
 }
 
 declare global {

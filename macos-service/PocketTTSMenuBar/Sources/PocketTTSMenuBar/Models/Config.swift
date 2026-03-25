@@ -11,12 +11,14 @@ struct AppConfig: Codable {
     var serverPort: Int
     var autoStartServer: Bool
     var version: String
+    var selectedBackend: String?
 
     static let `default` = AppConfig(
         selectedVoiceId: Constants.defaultVoiceId,
         selectedVoiceType: .predefined,
         serverPort: Constants.defaultServerPort,
         autoStartServer: true,
-        version: Constants.configVersion
+        version: Constants.configVersion,
+        selectedBackend: Constants.defaultBackend
     )
 }

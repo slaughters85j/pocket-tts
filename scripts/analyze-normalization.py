@@ -100,7 +100,7 @@ def print_analysis(info: dict, label: str | None = None) -> None:
     print(f"  Overall Peak: {info['overall_peak_db']:+.1f} dB")
     print(f"  Headroom:     {-info['overall_peak_db']:.1f} dB")
     print()
-    print(f"  Windowed RMS (1s windows, 50% overlap):")
+    print("  Windowed RMS (1s windows, 50% overlap):")
     print(f"    Min:   {info['rms_min_db']:+.1f} dB")
     print(f"    Max:   {info['rms_max_db']:+.1f} dB")
     print(f"    Range: {info['rms_max_db'] - info['rms_min_db']:.1f} dB")
@@ -117,7 +117,7 @@ def print_analysis(info: dict, label: str | None = None) -> None:
     # Show windowed RMS timeline
     if info["windowed_rms_db"]:
         print()
-        print(f"  Timeline (each bar = 1s window):")
+        print("  Timeline (each bar = 1s window):")
         min_val = min(info["windowed_rms_db"])
         max_val = max(info["windowed_rms_db"])
         range_val = max(max_val - min_val, 0.1)
@@ -132,7 +132,7 @@ def print_analysis(info: dict, label: str | None = None) -> None:
 def print_comparison(analyses: list[dict], labels: list[str]) -> None:
     """Print side-by-side comparison of multiple files."""
     print(f"\n{'=' * 60}")
-    print(f"  COMPARISON SUMMARY")
+    print("  COMPARISON SUMMARY")
     print(f"{'=' * 60}")
     print()
     print(f"  {'Strategy':<20} {'RMS':>8} {'Peak':>8} {'StdDev':>8} {'Range':>8}")

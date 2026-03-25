@@ -5,3 +5,7 @@ DEFAULT_LSD_DECODE_STEPS = 1
 DEFAULT_NOISE_CLAMP = None
 DEFAULT_EOS_THRESHOLD = -4.0
 DEFAULT_FRAMES_AFTER_EOS = None
+
+# Backend selection
+DEFAULT_BACKEND = "pocket-tts"
+FISH_SPEECH_MODEL_PATH = "mlx-community/fish-audio-s2-pro-8bit"

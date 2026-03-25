@@ -311,6 +311,65 @@ export function registerIpcHandlers(
       });
     });
   });
+
+  // ------------------------------------------------------------------
+  // Backend management
+  // ------------------------------------------------------------------
+
+  ipcMain.handle(
+    'backend:list',
+    async (): Promise<{ available: string[]; active: string | null; supports_tags: boolean }> => {
+      const pythonServer = getPythonServer();
+      if (!pythonServer || !pythonServer.port) {
+        return { available: ['pocket-tts'], active: null, supports_tags: false };
+      }
+      try {
+        const response = await fetch(`http://localhost:${pythonServer.port}/backends`);
+        return await response.json();
+      } catch {
+        return { available: ['pocket-tts'], active: null, supports_tags: false };
+      }
+    }
+  );
+
+  ipcMain.handle('backend:switch', async (_event: IpcMainInvokeEvent, name: string) => {
+    const pythonServer = getPythonServer();
+    if (!pythonServer || !pythonServer.port) {
+      throw new Error('TTS server is not running');
+    }
+    const response = await fetch(`http://localhost:${pythonServer.port}/switch-backend`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ backend: name }),
+    });
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Backend switch failed: ${response.status} - ${errorText}`);
+    }
+    const result = await response.json();
+
+    // Persist selection to shared config.json so Menu Bar / Quick Action / next launch pick it up
+    try {
+      const configDir = path.join(
+        os.homedir(),
+        'Library',
+        'Application Support',
+        'pocket-tts-electron'
+      );
+      const configPath = path.join(configDir, 'config.json');
+      let config: Record<string, unknown> = {};
+      if (fs.existsSync(configPath)) {
+        config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+      }
+      config.selectedBackend = name;
+      fs.mkdirSync(configDir, { recursive: true });
+      fs.writeFileSync(configPath, JSON.stringify(config, Object.keys(config).sort(), 2) + '\n');
+    } catch (err) {
+      console.warn('Could not persist backend selection to config.json:', err);
+    }
+
+    return result;
+  });
 }
 
 // ─── Voice Enhancement Handlers ──────────────────────────────────────────────
@@ -497,6 +556,7 @@ export function registerEnhancementHandlers(
       });
     }
   );
+
 }
 
 // Clean up temp files on app quit

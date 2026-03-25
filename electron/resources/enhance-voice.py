@@ -39,7 +39,6 @@ def detect_device(requested: str) -> str:
 
 def normalize_rms(audio_tensor, target_db: float):
     """Normalize audio tensor to a target RMS level in dB (relative to full scale)."""
-    import torch
 
     rms = audio_tensor.float().square().mean().sqrt()
     if rms < 1e-8:
@@ -74,7 +73,6 @@ def enhance_audio(
     Returns dict with enhancement metadata.
     """
     import soundfile as sf
-    import torch
     import torchaudio.functional as F
 
     device = detect_device(device)
@@ -150,10 +148,7 @@ def main():
     parser.add_argument("--input", required=True, help="Input audio file path")
     parser.add_argument("--output", required=True, help="Output audio file path")
     parser.add_argument(
-        "--denoise",
-        action="store_true",
-        default=True,
-        help="Apply denoising (default: True)",
+        "--denoise", action="store_true", default=True, help="Apply denoising (default: True)"
     )
     parser.add_argument(
         "--no-denoise", action="store_false", dest="denoise", help="Disable denoising"
