@@ -491,6 +491,17 @@ class FishSpeechBackend:
 
         logger.info("Encoding %s through DAC codec (one-time)...", Path(wav_path).name)
         audio = load_audio(wav_path, sample_rate=self._model.sample_rate)
+
+        # Cap reference audio at 30s — voice cloning quality plateaus beyond this,
+        # and longer prompts increase KV cache size → slower Dual-AR inference.
+        max_samples = 30 * self._model.sample_rate
+        if audio.shape[-1] > max_samples:
+            logger.info(
+                "Trimming ref audio from %.1fs to 30s for codec encoding",
+                audio.shape[-1] / self._model.sample_rate,
+            )
+            audio = audio[..., :max_samples]
+
         if audio.ndim == 1:
             audio = audio[None, None, :]
         elif audio.ndim == 2:

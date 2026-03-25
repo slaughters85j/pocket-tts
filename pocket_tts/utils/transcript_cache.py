@@ -117,8 +117,12 @@ def transcribe_and_cache(wav_path: str | Path) -> str:
     del stt_model
     mx.clear_cache()
 
-    logger.info("Whisper transcript (%d chars): %.80s%s", len(transcript), transcript,
-                "..." if len(transcript) > 80 else "")
+    logger.info(
+        "Whisper transcript (%d chars): %.80s%s",
+        len(transcript),
+        transcript,
+        "..." if len(transcript) > 80 else "",
+    )
 
     store_transcript(wav_path, transcript)
     return transcript
