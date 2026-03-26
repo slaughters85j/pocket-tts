@@ -13,6 +13,9 @@ interface TTSParams {
   voiceFile?: ArrayBuffer;
   savedVoiceId?: string;
   rmsTargetDb?: number;
+  fishTemperature?: number;
+  fishTopP?: number;
+  fishTopK?: number;
 }
 
 interface SpeakerConfig {
@@ -27,6 +30,9 @@ interface MultiTTSParams {
   script: string;
   speakers: SpeakerConfig[];
   crossfade_ms?: number;
+  fishTemperature?: number;
+  fishTopP?: number;
+  fishTopK?: number;
 }
 
 // Module-level abort controller for cancelling in-flight TTS requests
@@ -37,7 +43,7 @@ export function registerIpcHandlers(
   voiceManager: { getVoiceFilePath: (id: string) => string | null }
 ) {
   ipcMain.handle('tts:generate', async (event: IpcMainInvokeEvent, params: TTSParams) => {
-    const { text, voiceUrl, voiceFile, savedVoiceId, rmsTargetDb } = params;
+    const { text, voiceUrl, voiceFile, savedVoiceId, rmsTargetDb, fishTemperature, fishTopP, fishTopK } = params;
     const sender = event.sender;
 
     const pythonServer = getPythonServer();
@@ -110,6 +116,11 @@ export function registerIpcHandlers(
         formData.append('rms_target_db', rmsTargetDb.toString());
       }
 
+      // Fish-speech generation params
+      if (fishTemperature !== undefined) formData.append('fish_temperature', fishTemperature.toString());
+      if (fishTopP !== undefined) formData.append('fish_top_p', fishTopP.toString());
+      if (fishTopK !== undefined) formData.append('fish_top_k', fishTopK.toString());
+
       const response = await fetch(`http://localhost:${pythonServer.port}/tts`, {
         method: 'POST',
         body: formData,
@@ -159,7 +170,7 @@ export function registerIpcHandlers(
 
   // Multi-Talk TTS handler
   ipcMain.handle('tts:generate-multi', async (event: IpcMainInvokeEvent, params: MultiTTSParams) => {
-    const { script, speakers, crossfade_ms = 100 } = params;
+    const { script, speakers, crossfade_ms = 100, fishTemperature, fishTopP, fishTopK } = params;
     const sender = event.sender;
 
     const pythonServer = getPythonServer();
@@ -202,6 +213,11 @@ export function registerIpcHandlers(
       formData.append('script', script);
       formData.append('speakers', JSON.stringify(resolvedSpeakers));
       formData.append('crossfade_ms', crossfade_ms.toString());
+
+      // Fish-speech generation params
+      if (fishTemperature !== undefined) formData.append('fish_temperature', fishTemperature.toString());
+      if (fishTopP !== undefined) formData.append('fish_top_p', fishTopP.toString());
+      if (fishTopK !== undefined) formData.append('fish_top_k', fishTopK.toString());
 
       const response = await fetch(`http://localhost:${pythonServer.port}/multi-tts`, {
         method: 'POST',

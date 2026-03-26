@@ -9,7 +9,7 @@ import { SaveVoiceModal } from './components/SaveVoiceModal';
 import { EnhancementStudio } from './components/EnhancementStudio';
 import { MultiTalk, MultiTalkConfig } from './components/MultiTalk';
 import { History, HistoryEntry, addToHistory } from './components/History';
-import { BackendSelector, BackendInfo } from './components/BackendSelector';
+import { BackendSelector, BackendInfo, FishGenParams } from './components/BackendSelector';
 import { StreamingWavPlayer } from './lib/streaming-wav-player';
 import './types/electron.d.ts';
 
@@ -51,6 +51,21 @@ export default function App() {
     supports_tags: false,
   });
 
+  // When switching to fish-speech, predefined voices won't work — auto-select first saved voice
+  const handleBackendChange = useCallback((info: BackendInfo) => {
+    setBackendInfo(info);
+    if (info.active === 'fish-speech') {
+      const isPredefined = !selectedVoice.startsWith('saved:') && selectedVoice !== 'custom';
+      if (isPredefined && savedVoices.length > 0) {
+        setSelectedVoice(`saved:${savedVoices[0].id}`);
+      } else if (isPredefined && savedVoices.length === 0) {
+        // No saved voices available — user will see an error when they try to generate
+        setSelectedVoice('');
+      }
+    }
+  }, [selectedVoice, savedVoices]);
+
+  const [fishParams, setFishParams] = useState<FishGenParams>({ temperature: 0.7, topP: 0.7, topK: 30 });
   const [isPaused, setIsPaused] = useState(false);
 
   const textInputRef = useRef<HTMLTextAreaElement>(null);
@@ -123,6 +138,10 @@ export default function App() {
           text,
           voice: selectedVoice,
           voiceName,
+          backend: backendInfo.active || undefined,
+          fishTemperature: backendInfo.active === 'fish-speech' ? fishParams.temperature : undefined,
+          fishTopP: backendInfo.active === 'fish-speech' ? fishParams.topP : undefined,
+          fishTopK: backendInfo.active === 'fish-speech' ? fishParams.topK : undefined,
         });
       },
       onError: (error) => {
@@ -195,6 +214,9 @@ export default function App() {
         voiceFile,
         savedVoiceId,
         rmsTargetDb,
+        fishTemperature: fishParams.temperature,
+        fishTopP: fishParams.topP,
+        fishTopK: fishParams.topK,
       });
     } catch (error) {
       setGenerationState((prev) => ({
@@ -309,8 +331,20 @@ export default function App() {
     if (entry.text) setText(entry.text);
     if (entry.voice) setSelectedVoice(entry.voice);
     setCustomAudioFile(null);
+    // Restore fish params if they were saved
+    if (entry.fishTemperature !== undefined) {
+      setFishParams({
+        temperature: entry.fishTemperature,
+        topP: entry.fishTopP ?? 0.7,
+        topK: entry.fishTopK ?? 30,
+      });
+    }
+    // Switch backend if needed
+    if (entry.backend && entry.backend !== backendInfo.active) {
+      window.electronAPI?.switchBackend(entry.backend).catch(() => {});
+    }
     setActiveTab('single');
-  }, []);
+  }, [backendInfo.active]);
 
   const handleReuseMulti = useCallback((entry: HistoryEntry) => {
     if (entry.script && entry.speakers) {
@@ -404,7 +438,9 @@ export default function App() {
                 {/* Model Selector */}
                 <BackendSelector
                   disabled={isGenerating}
-                  onBackendChange={setBackendInfo}
+                  onBackendChange={handleBackendChange}
+                  fishParams={fishParams}
+                  onFishParamsChange={setFishParams}
                 />
 
                 {/* Voice Selector */}
@@ -496,7 +532,10 @@ export default function App() {
           <MultiTalk
             pendingConfig={pendingMultiConfig}
             onConfigLoaded={handleMultiConfigLoaded}
-            onBackendChange={setBackendInfo}
+            onBackendChange={handleBackendChange}
+            backendName={backendInfo.active}
+            fishParams={fishParams}
+            onFishParamsChange={setFishParams}
           />
         )}
 

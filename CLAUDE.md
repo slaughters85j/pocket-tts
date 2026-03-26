@@ -113,6 +113,8 @@ Python streaming script + Swift menu bar app + shell scripts:
 - **Test conftest** sets `POCKET_TTS_ERROR_WITHOUT_EOS=1` so tests fail if EOS is never predicted.
 - **Voice cloning** requires gated HF model access (`hf auth login`). Predefined voices work without auth.
 - **Model weights** auto-download from HuggingFace Hub on first use and cache locally.
+- **Fish-speech model** — entire `models/fish-audio-s2-pro-8bit/` directory is gitignored. Download all files: `huggingface-cli download mlx-community/fish-audio-s2-pro-8bit --local-dir models/fish-audio-s2-pro-8bit`. Falls back to HF repo ID if local dir missing.
+- **Fish-speech optimizations** — codec indices cached to `~/Library/Application Support/pocket-tts-electron/codec-cache/` (two-tier: memory + disk .npz). Whisper transcripts cached to `voice_transcripts.json`. Ref audio trimmed to 30s. `[Xs]` pause markers converted to native `[pause]`/`[short pause]`/`[long pause]` tags.
 
 ## Gotchas
 

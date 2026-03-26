@@ -8,7 +8,7 @@ import { GenerationStatus } from '../App';
 import { PREDEFINED_VOICES, SavedVoice } from './VoiceSelector';
 import { addToHistory } from './History';
 import { PauseModal } from './PauseModal';
-import { BackendSelector, BackendInfo } from './BackendSelector';
+import { BackendSelector, BackendInfo, FishGenParams } from './BackendSelector';
 
 interface MultiTalkExportConfig {
   version: string;
@@ -47,11 +47,14 @@ interface MultiTalkProps {
   pendingConfig?: MultiTalkConfig | null;
   onConfigLoaded?: () => void;
   onBackendChange?: (info: BackendInfo) => void;
+  backendName?: string | null;
+  fishParams?: FishGenParams;
+  onFishParamsChange?: (params: FishGenParams) => void;
 }
 
 let nextSpeakerId = 1;
 
-export function MultiTalk({ pendingConfig, onConfigLoaded, onBackendChange }: MultiTalkProps) {
+export function MultiTalk({ pendingConfig, onConfigLoaded, onBackendChange, backendName, fishParams, onFishParamsChange }: MultiTalkProps) {
   const [speakers, setSpeakers] = useState<Speaker[]>([
     {
       id: `speaker-${nextSpeakerId++}`,
@@ -290,6 +293,10 @@ export function MultiTalk({ pendingConfig, onConfigLoaded, onBackendChange }: Mu
               seed: s.seed,
             };
           }),
+          backend: backendName || undefined,
+          fishTemperature: backendName === 'fish-speech' ? fishParams?.temperature : undefined,
+          fishTopP: backendName === 'fish-speech' ? fishParams?.topP : undefined,
+          fishTopK: backendName === 'fish-speech' ? fishParams?.topK : undefined,
         });
       },
       onError: (error) => {
@@ -370,6 +377,9 @@ export function MultiTalk({ pendingConfig, onConfigLoaded, onBackendChange }: Mu
         script,
         speakers: speakersData,
         crossfade_ms: 100,
+        fishTemperature: fishParams?.temperature,
+        fishTopP: fishParams?.topP,
+        fishTopK: fishParams?.topK,
       });
     } catch (error) {
       setGenerationState((prev) => ({
@@ -553,6 +563,8 @@ export function MultiTalk({ pendingConfig, onConfigLoaded, onBackendChange }: Mu
           <BackendSelector
             disabled={isGenerating}
             onBackendChange={onBackendChange}
+            fishParams={fishParams}
+            onFishParamsChange={onFishParamsChange}
           />
 
           {/* Volume Normalization Strategy */}

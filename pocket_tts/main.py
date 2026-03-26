@@ -300,7 +300,7 @@ def transcribe_voice(voice_wav: UploadFile = File(...)):
             os.unlink(temp_file.name)
 
 
-def write_to_queue(queue, text_to_generate, voice_state, cancel_event=None):
+def write_to_queue(queue, text_to_generate, voice_state, cancel_event=None, **gen_kwargs):
     """Allows writing to the StreamingResponse as if it were a file."""
 
     class FileLikeToQueue(io.IOBase):
@@ -318,13 +318,16 @@ def write_to_queue(queue, text_to_generate, voice_state, cancel_event=None):
 
     active = backend_manager.active
     audio_chunks = active.generate_audio_stream(
-        voice_state=voice_state, text=text_to_generate, cancel_event=cancel_event
+        voice_state=voice_state, text=text_to_generate, cancel_event=cancel_event, **gen_kwargs
     )
     stream_audio_chunks(FileLikeToQueue(queue), audio_chunks, active.sample_rate)
 
 
 def generate_data_with_state(
-    text_to_generate: str, voice_state: Any, request: starlette_requests.Request | None = None
+    text_to_generate: str,
+    voice_state: Any,
+    request: starlette_requests.Request | None = None,
+    **gen_kwargs: Any,
 ):
     queue = Queue()
     cancel_event = threading.Event()
@@ -355,7 +358,9 @@ def generate_data_with_state(
 
     # Run generation in a thread
     thread = threading.Thread(
-        target=write_to_queue, args=(queue, text_to_generate, voice_state, cancel_event)
+        target=write_to_queue,
+        args=(queue, text_to_generate, voice_state, cancel_event),
+        kwargs=gen_kwargs,
     )
     thread.start()
 
@@ -377,6 +382,10 @@ def text_to_speech(
     voice_url: str | None = Form(None),
     voice_wav: UploadFile | None = File(None),
     rms_target_db: float = Form(-16.0),
+    # Fish-speech generation params (ignored by pocket-tts backend)
+    fish_temperature: float = Form(0.7),
+    fish_top_p: float = Form(0.7),
+    fish_top_k: int = Form(30),
 ):
     """
     Generate speech from text using the pre-loaded voice prompt or a custom voice.
@@ -397,6 +406,22 @@ def text_to_speech(
         raise HTTPException(status_code=400, detail="Cannot provide both voice_url and voice_wav")
 
     active = backend_manager.active
+
+    # Fish-speech requires a custom voice WAV — predefined names and no-voice both produce garbage.
+    # Reject predefined voice names early with a helpful error.
+    if active.backend_name == "fish-speech":
+        if voice_url is not None and voice_url in PREDEFINED_VOICES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Fish Audio S2 Pro does not support predefined voice '{voice_url}'. "
+                "Please select a custom saved voice.",
+            )
+        if voice_url is None and voice_wav is None:
+            raise HTTPException(
+                status_code=400,
+                detail="Fish Audio S2 Pro requires a custom voice for voice cloning. "
+                "Please select a saved voice or upload a voice WAV file.",
+            )
 
     # Use the appropriate voice state
     if voice_url is not None:
@@ -443,7 +468,14 @@ def text_to_speech(
         voice_state = backend_manager.default_voice_state
 
     return StreamingResponse(
-        generate_data_with_state(text, voice_state, request=request),
+        generate_data_with_state(
+            text,
+            voice_state,
+            request=request,
+            temperature=fish_temperature,
+            top_p=fish_top_p,
+            top_k=fish_top_k,
+        ),
         media_type="audio/wav",
         headers={
             "Content-Disposition": "attachment; filename=generated_speech.wav",
@@ -458,6 +490,10 @@ def multi_talk_to_speech(
     script: str = Form(...),
     speakers: str = Form(...),
     crossfade_ms: int = Form(100),
+    # Fish-speech generation params (ignored by pocket-tts backend)
+    fish_temperature: float = Form(0.7),
+    fish_top_p: float = Form(0.7),
+    fish_top_k: int = Form(30),
 ):
     """
     Generate multi-speaker audio from a script with speaker tags.
@@ -616,7 +652,12 @@ def multi_talk_to_speech(
                 # Collect all chunks from the stream into a single numpy array
                 chunks = []
                 for chunk in active.generate_audio_stream(
-                    voice_state=state, text=segment.text, cancel_event=cancel_event
+                    voice_state=state,
+                    text=segment.text,
+                    cancel_event=cancel_event,
+                    temperature=fish_temperature,
+                    top_p=fish_top_p,
+                    top_k=fish_top_k,
                 ):
                     chunks.append(chunk.squeeze().numpy())
                 if not chunks:

@@ -87,7 +87,11 @@ class TTSBackend(Protocol):
     # ------------------------------------------------------------------
 
     def generate_audio_stream(
-        self, voice_state: Any, text: str, cancel_event: threading.Event | None = None
+        self,
+        voice_state: Any,
+        text: str,
+        cancel_event: threading.Event | None = None,
+        **kwargs: Any,
     ) -> Iterator[torch.Tensor]:
         """Yield PCM audio chunks as 1-D ``torch.Tensor`` (shape ``[samples]``).
 

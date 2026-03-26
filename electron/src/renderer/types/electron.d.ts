@@ -4,6 +4,10 @@ export interface TTSParams {
   voiceFile?: ArrayBuffer;
   savedVoiceId?: string;
   rmsTargetDb?: number;
+  // Fish-speech generation params (ignored by pocket-tts)
+  fishTemperature?: number;
+  fishTopP?: number;
+  fishTopK?: number;
 }
 
 export interface EnhancementMeta {
@@ -40,6 +44,9 @@ export interface MultiTTSParams {
   script: string;
   speakers: SpeakerConfig[];
   crossfade_ms?: number;
+  fishTemperature?: number;
+  fishTopP?: number;
+  fishTopK?: number;
 }
 
 export interface ElectronAPI {

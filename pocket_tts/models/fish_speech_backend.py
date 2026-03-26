@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import threading
 from dataclasses import dataclass
 from functools import lru_cache
@@ -24,16 +25,33 @@ import torch
 
 logger = logging.getLogger(__name__)
 
-# Default model — HuggingFace repo ID or local path.
+# Default model path — checks local models/ dir first, falls back to HuggingFace repo ID.
 # Override with FISH_SPEECH_MODEL_PATH env var.
+_LOCAL_MODEL_DIR = Path(__file__).parent.parent.parent / "models" / "fish-audio-s2-pro-8bit"
 _DEFAULT_MODEL_PATH = os.environ.get(
-    "FISH_SPEECH_MODEL_PATH", "mlx-community/fish-audio-s2-pro-8bit"
+    "FISH_SPEECH_MODEL_PATH",
+    str(_LOCAL_MODEL_DIR) if _LOCAL_MODEL_DIR.exists() else "mlx-community/fish-audio-s2-pro-8bit",
 )
 
 
 # ------------------------------------------------------------------
 # Voice state dataclass
 # ------------------------------------------------------------------
+
+
+def _normalize_audio_rms(audio: torch.Tensor, target_db: float = -16.0) -> torch.Tensor:
+    """Normalize audio to a target RMS level in dB, clipped to [-1, 1].
+
+    Matches the behavior of ``TTSModel._normalize_audio_rms`` from the
+    pocket-tts backend so that voice normalization modes (per-voice,
+    match loudest, match quietest) produce consistent output levels.
+    """
+    rms = audio.square().mean().sqrt()
+    if rms < 1e-8:
+        return audio  # silence — don't amplify noise
+    target_rms = 10 ** (target_db / 20.0)
+    gain = target_rms / rms
+    return (audio * gain).clamp(-1.0, 1.0)
 
 
 @dataclass(frozen=True)
@@ -46,6 +64,35 @@ class FishVoiceState:
 
     ref_audio_path: str | None = None
     ref_text: str | None = None
+    target_db: float = -16.0  # RMS normalization target for output audio
+
+
+# Regex for [Xs] pause markers — used to convert to native fish-speech pause tags
+_PAUSE_MARKER_RE = re.compile(r"\[(\d+(?:\.\d+)?)s\]", re.IGNORECASE)
+
+
+def _convert_pause_markers_to_tags(text: str) -> str:
+    """Convert pocket-tts ``[Xs]`` pause markers to fish-speech native pause tags.
+
+    Instead of splitting the text and inserting silence (which breaks tag context
+    across the Dual-AR), we replace pause markers with native tags that the model
+    handles in-context:
+
+    - ``< 0.5s``  → ``[short pause]``
+    - ``0.5–2s``  → ``[pause]``
+    - ``> 2s``    → ``[long pause]``
+    """
+
+    def _replace(m: re.Match) -> str:
+        duration = float(m.group(1))
+        if duration < 0.5:
+            return "[short pause]"
+        elif duration <= 2.0:
+            return "[pause]"
+        else:
+            return "[long pause]"
+
+    return _PAUSE_MARKER_RE.sub(_replace, text)
 
 
 # ------------------------------------------------------------------
@@ -376,10 +423,12 @@ class FishSpeechBackend:
                     path.name,
                 )
                 ref_text = transcribe_and_cache(path)
-            return FishVoiceState(ref_audio_path=str(path), ref_text=ref_text)
+            return FishVoiceState(
+                ref_audio_path=str(path), ref_text=ref_text, target_db=float(target_db)
+            )
 
         logger.warning("Voice file not found: %s — using default voice", path)
-        return FishVoiceState()
+        return FishVoiceState(target_db=float(target_db))
 
     def cached_get_voice_state(
         self, voice_source: str | Path, target_db: float | int = -16.0
@@ -401,7 +450,11 @@ class FishSpeechBackend:
     # ------------------------------------------------------------------
 
     def generate_audio_stream(
-        self, voice_state: Any, text: str, cancel_event: threading.Event | None = None
+        self,
+        voice_state: Any,
+        text: str,
+        cancel_event: threading.Event | None = None,
+        **kwargs: Any,
     ) -> Iterator[torch.Tensor]:
         """Yield audio chunks as ``torch.Tensor`` (1-D, float32).
 
@@ -409,36 +462,24 @@ class FishSpeechBackend:
         streaming).  For short text this may be a single yield; for longer
         text the model splits into sentence batches automatically.
 
-        Handles pocket-tts ``[Xs]`` pause markers by splitting text into
-        segments and inserting silence between them.
+        Pocket-tts ``[Xs]`` pause markers are converted to native fish-speech
+        pause tags (``[short pause]``, ``[pause]``, ``[long pause]``) so the
+        full text is sent as a single generation call.  This preserves tag
+        context across the Dual-AR — emotion transitions stay coherent instead
+        of being fragmented into isolated segments.
+
+        Extra ``**kwargs`` are forwarded to generation (e.g. ``temperature``,
+        ``top_p``, ``top_k``).
         """
         if self._model is None:
             raise RuntimeError("Backend not loaded — call load() first")
 
-        from pocket_tts.text_normalizer import parse_pause_markers
+        # Convert [Xs] markers to native pause tags instead of splitting
+        converted_text = _convert_pause_markers_to_tags(text).strip()
+        if not converted_text:
+            return
 
-        # Split on [Xs] pause markers first
-        segments = parse_pause_markers(text)
-
-        for segment in segments:
-            if cancel_event is not None and cancel_event.is_set():
-                logger.info("fish-speech generation cancelled")
-                return
-
-            # Pause marker → yield silence
-            if isinstance(segment, float):
-                silence_samples = int(segment * self.sample_rate)
-                if silence_samples > 0:
-                    logger.info("fish-speech inserting %.1fs silence", segment)
-                    yield torch.zeros(silence_samples, dtype=torch.float32)
-                continue
-
-            # Text segment → generate audio
-            segment_text = segment.strip()
-            if not segment_text:
-                continue
-
-            yield from self._generate_text_segment(segment_text, voice_state, cancel_event)
+        yield from self._generate_text_segment(converted_text, voice_state, cancel_event, **kwargs)
 
     # Disk cache directory for codec indices
     _CODEC_CACHE_DIR = (
@@ -533,19 +574,27 @@ class FishSpeechBackend:
 
         return codes, prompt_length
 
+    # Regex to detect fish-speech inline tags like [whisper], [excited], etc.
+    # Excludes [Xs] pause markers (handled separately by parse_pause_markers).
+    _TAG_RE = re.compile(r"\[[a-zA-Z]")
+
     def _generate_text_segment(
-        self, text: str, voice_state: Any, cancel_event: threading.Event | None = None
+        self,
+        text: str,
+        voice_state: Any,
+        cancel_event: threading.Event | None = None,
+        **kwargs: Any,
     ) -> Iterator[torch.Tensor]:
-        """Generate audio for a single text segment (no pause markers)."""
+        """Generate audio for a single text segment."""
         ref_text: str | None = None
         gen_kwargs: dict[str, Any] = {
             "text": text,
             "ref_audio": None,
             "ref_text": None,
             "max_tokens": 2048,
-            "temperature": 0.7,
-            "top_p": 0.7,
-            "top_k": 30,
+            "temperature": kwargs.get("temperature", 0.7),
+            "top_p": kwargs.get("top_p", 0.7),
+            "top_k": kwargs.get("top_k", 30),
         }
 
         if isinstance(voice_state, FishVoiceState) and voice_state.ref_audio_path:
@@ -558,6 +607,13 @@ class FishSpeechBackend:
             gen_kwargs["ref_codes_length"] = prompt_length
             # ref_audio stays None — the patched generate() uses ref_codes instead
 
+        # When inline [tags] are present, skip RMS normalization to preserve
+        # the model's intended dynamic range (e.g. [whisper] should be quiet,
+        # [loud angry shouting] should be loud).  Without tags, normalize to
+        # the user's configured target_db for consistent output levels.
+        has_tags = bool(self._TAG_RE.search(text))
+        target_db = voice_state.target_db if isinstance(voice_state, FishVoiceState) else -16.0
+
         logger.info("fish-speech generating: %.60s%s", text, "..." if len(text) > 60 else "")
 
         for result in self._model.generate(**gen_kwargs):
@@ -569,17 +625,22 @@ class FishSpeechBackend:
             audio_np = np.array(result.audio, copy=False).astype(np.float32)
             audio_tensor = torch.from_numpy(audio_np)
 
-            # Normalise to [-1, 1] range if needed
-            peak = audio_tensor.abs().max()
-            if peak > 1.0:
-                audio_tensor = audio_tensor / peak
+            if has_tags:
+                # Tags present — only clamp to [-1, 1], preserve model dynamics
+                peak = audio_tensor.abs().max()
+                if peak > 1.0:
+                    audio_tensor = audio_tensor / peak
+            else:
+                # No tags — apply RMS normalization to target level
+                audio_tensor = _normalize_audio_rms(audio_tensor, target_db)
 
             logger.info(
-                "fish-speech segment %d: %.1fs audio, RTF=%.2f, peak_mem=%.1f GB",
+                "fish-speech segment %d: %.1fs audio, RTF=%.2f, peak_mem=%.1f GB%s",
                 result.segment_idx,
                 float(result.audio.shape[0]) / self.sample_rate,
                 result.real_time_factor,
                 result.peak_memory_usage,
+                "" if has_tags else f", norm={target_db:.0f} dB",
             )
 
             yield audio_tensor

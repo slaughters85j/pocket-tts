@@ -153,10 +153,17 @@ An alternate TTS backend using [Fish Audio S2 Pro](https://huggingface.co/mlx-co
 ### Setup
 
 ```bash
+# 1. Install MLX dependencies
 uv sync --group mlx
+
+# 2. Download the model (~6.7 GB)
+huggingface-cli download mlx-community/fish-audio-s2-pro-8bit \
+  --local-dir models/fish-audio-s2-pro-8bit
 ```
 
-This installs `mlx-audio` as an optional dependency. The rebuild script (`scripts/rebuild-all.sh`) does this automatically on Apple Silicon.
+The entire `models/fish-audio-s2-pro-8bit/` directory is gitignored — all files come from HuggingFace so updates are always in sync. The rebuild script (`scripts/rebuild-all.sh`) installs MLX dependencies automatically on Apple Silicon.
+
+> **Note:** The model is gated under the [Fish Audio Research License](https://huggingface.co/fishaudio/s2-pro/blob/main/LICENSE). If prompted, accept the license at the HuggingFace page and authenticate with `huggingface-cli login` first.
 
 ### Usage
 
@@ -171,9 +178,41 @@ Only one model is loaded at a time. Switching unloads the current model and load
 
 Fish Audio S2 Pro supports 15,000+ inline tags for fine-grained control:
 
+## Fine-Grained Inline Control
+
+S2 Pro enables localized control over speech generation by embedding natural-language instructions directly within the text using `[tag]` syntax. Rather than relying on a fixed set of predefined tags, S2 Pro accepts free-form textual descriptions — such as `[whisper in small voice]`, `[professional broadcast tone]`, or `[pitch up]` — allowing open-ended expression control at the word level.
+
 ```
-[whisper]This is a secret. [excited]And this is exciting!
-[warm and reassuring tone]Everything will be fine.
+[whisper in small voice]
+[professional broadcast tone]
+[pitch up]
+```
+
+**Common Tags (15,000+ unique tags supported):**
+
+`[pause]` `[emphasis]` `[laughing]` `[inhale]` `[chuckle]` `[tsk]` `[singing]` `[excited]` `[laughing tone]` `[interrupting]` `[chuckling]` `[excited tone]` `[volume up]` `[echo]` `[angry]` `[low volume]` `[sigh]` `[low voice]` `[whisper]` `[screaming]` `[shouting]` `[loud]` `[surprised]` `[short pause]` `[exhale]` `[delight]` `[panting]` `[audience laughter]` `[with strong accent]` `[volume down]` `[clearing throat]` `[sad]` `[moaning]` `[shocked]`
+
+### Inline Tag Best Practices
+
+Based on local MLX inference testing, the following guidelines produce the most reliable output:
+
+- **One tag per phrase or sentence.** Give the model enough text after a tag to settle into the style before switching. Rapid tag switching every sentence degrades quality.
+- **Do not stack tags back-to-back.** Adjacent tags with no text between them (e.g., `[audience laughter][chuckling]`) produce garbled or distorted audio. Separate them with natural text or a full sentence.
+- **`[pause]` counts as a tag.** Do not place `[pause]` immediately before another tag — insert text between them.
+- **`[singing]` is unreliable.** The model is a TTS system, not a vocoder trained on melodic data. Expect spoken cadence, not actual singing.
+- **`[screaming]` causes distortion.** Audio phases out and distorts even with adequate text after the tag. Use `[loud]` or `[troubled]` as safer alternatives for high-intensity delivery.
+- **Emotion transitions need runway.** When shifting between emotions, allow at least one full sentence per tag so the Dual-AR architecture can stabilize the new prosody.
+
+**Good:**
+```
+[excited]I cannot believe this works! After all that effort, we finally have local inference.
+[whisper]And the best part is, nobody else knows about it yet.
+```
+
+**Bad:**
+```
+[excited]Wow! [sad]But also sad. [angry]And frustrating! [laughing]Just kidding.
+[pause][short pause][excited]Surprise![audience laughter][chuckling]Funny right?
 ```
 
 ### Limitations

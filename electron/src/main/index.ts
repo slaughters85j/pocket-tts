@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain } from 'electron';
+import { app, BrowserWindow, ipcMain, Menu, MenuItem } from 'electron';
 import * as path from 'path';
 import { PythonServer } from './python-server';
 import { registerIpcHandlers, registerEnhancementHandlers, cleanupEnhancer } from './ipc-handlers';
@@ -36,6 +36,50 @@ async function createWindow() {
   }
 
   // DevTools off by default - can be toggled via IPC
+
+  // Spellcheck context menu — right-click shows OS-style spelling suggestions
+  mainWindow.webContents.on('context-menu', (_event, params) => {
+    const menu = new Menu();
+
+    // Add spelling suggestions
+    if (params.dictionarySuggestions.length > 0) {
+      for (const suggestion of params.dictionarySuggestions) {
+        menu.append(
+          new MenuItem({
+            label: suggestion,
+            click: () => mainWindow?.webContents.replaceMisspelling(suggestion),
+          })
+        );
+      }
+      menu.append(new MenuItem({ type: 'separator' }));
+    }
+
+    // "Add to Dictionary" for misspelled words
+    if (params.misspelledWord) {
+      menu.append(
+        new MenuItem({
+          label: `Add "${params.misspelledWord}" to dictionary`,
+          click: () =>
+            mainWindow?.webContents.session.addWordToSpellCheckerDictionary(params.misspelledWord),
+        })
+      );
+      menu.append(new MenuItem({ type: 'separator' }));
+    }
+
+    // Standard edit actions for text fields
+    if (params.isEditable) {
+      menu.append(new MenuItem({ role: 'cut', enabled: params.editFlags.canCut }));
+      menu.append(new MenuItem({ role: 'copy', enabled: params.editFlags.canCopy }));
+      menu.append(new MenuItem({ role: 'paste', enabled: params.editFlags.canPaste }));
+      menu.append(new MenuItem({ role: 'selectAll', enabled: params.editFlags.canSelectAll }));
+    } else if (params.selectionText) {
+      menu.append(new MenuItem({ role: 'copy' }));
+    }
+
+    if (menu.items.length > 0) {
+      menu.popup();
+    }
+  });
 
   // Log any load failures
   mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription) => {

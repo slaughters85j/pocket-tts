@@ -19,6 +19,11 @@ export interface HistoryEntry {
     fileData?: string | null;
     seed?: number | null;
   }[];
+  // Model settings (for restoring full generation context)
+  backend?: string;
+  fishTemperature?: number;
+  fishTopP?: number;
+  fishTopK?: number;
 }
 
 interface HistoryProps {
@@ -200,6 +205,15 @@ export function History({ onReuseSingle, onReuseMulti }: HistoryProps) {
                   >
                     {entry.type === 'single' ? 'Single' : 'Multi-Talk'}
                   </span>
+                  {entry.backend && (
+                    <span className={`text-xs px-2 py-0.5 rounded-full ${
+                      entry.backend === 'fish-speech'
+                        ? 'bg-emerald-500/20 text-emerald-400'
+                        : 'bg-amber-500/20 text-amber-400'
+                    }`}>
+                      {entry.backend === 'fish-speech' ? 'Fish Audio' : entry.backend === 'pocket-tts' ? 'Pocket TTS' : entry.backend}
+                    </span>
+                  )}
                   <span className="text-xs text-text-secondary">
                     {formatTimestamp(entry.timestamp)}
                   </span>
@@ -236,6 +250,11 @@ export function History({ onReuseSingle, onReuseMulti }: HistoryProps) {
                   <>
                     <p className="text-xs text-text-secondary mb-1">
                       Voice: {entry.voiceName || entry.voice}
+                      {entry.backend === 'fish-speech' && entry.fishTemperature !== undefined && (
+                        <span className="ml-2 text-text-secondary/60">
+                          t={entry.fishTemperature} p={entry.fishTopP} k={entry.fishTopK}
+                        </span>
+                      )}
                     </p>
                     <p className="font-mono text-xs bg-bg-tertiary rounded p-2">
                       {truncateText(entry.text || '')}

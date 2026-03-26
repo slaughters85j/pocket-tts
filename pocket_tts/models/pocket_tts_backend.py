@@ -98,7 +98,11 @@ class PocketTTSBackend:
         )
 
     def generate_audio_stream(
-        self, voice_state: Any, text: str, cancel_event: threading.Event | None = None
+        self,
+        voice_state: Any,
+        text: str,
+        cancel_event: threading.Event | None = None,
+        **_kwargs: Any,
     ) -> Iterator[torch.Tensor]:
         """Yield 80 ms PCM audio chunks at 24 kHz.
 

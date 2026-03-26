@@ -8,4 +8,6 @@ DEFAULT_FRAMES_AFTER_EOS = None
 
 # Backend selection
 DEFAULT_BACKEND = "pocket-tts"
-FISH_SPEECH_MODEL_PATH = "mlx-community/fish-audio-s2-pro-8bit"
+# Fish-speech model: local models/ dir preferred, HF repo ID as fallback.
+# See README.md for download instructions.
+FISH_SPEECH_MODEL_PATH = "models/fish-audio-s2-pro-8bit"
