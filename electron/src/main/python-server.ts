@@ -33,7 +33,9 @@ export class PythonServer {
     const args = this.getArgs(model);
     const cwd = this.getWorkingDirectory();
 
-    console.log(`Starting Python server: ${command} ${args.join(' ')} in ${cwd}`);
+    console.log(`[start] useUvSpawn=${this.useUvSpawn}, isDev=${this.isDev}, model=${model}`);
+    console.log(`[start] Command: ${command} ${args.join(' ')}`);
+    console.log(`[start] CWD: ${cwd}`);
 
     this.process = spawn(command, args, {
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -67,9 +69,56 @@ export class PythonServer {
     }
   }
 
+  /**
+   * Restart the server with a different backend model.
+   * Stops the current process, updates config, and starts fresh.
+   * In production this may switch between PyInstaller (pocket-tts) and uv (fish-speech).
+   */
+  async restart(model: string): Promise<void> {
+    console.log(`[restart] Stopping current server (port ${this.port})...`);
+    await this.stop();
+    // Wait for port to free up
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    // Update config so getConfiguredBackend reads the new model
+    this.persistBackendSelection(model);
+    console.log(`[restart] Config updated to model: ${model}`);
+    try {
+      await this.start();
+      console.log(`[restart] Server restarted on port ${this.port} with model ${model}`);
+    } catch (err) {
+      console.error(`[restart] Failed to restart with ${model}:`, err);
+      // Fall back to pocket-tts
+      console.log('[restart] Falling back to pocket-tts...');
+      this.persistBackendSelection('pocket-tts');
+      await this.start();
+      console.log(`[restart] Fallback server started on port ${this.port}`);
+    }
+  }
+
+  persistBackendSelection(name: string): void {
+    try {
+      const configDir = path.join(
+        app.getPath('home'),
+        'Library',
+        'Application Support',
+        'pocket-tts-electron'
+      );
+      const configPath = path.join(configDir, 'config.json');
+      let config: Record<string, unknown> = {};
+      if (fs.existsSync(configPath)) {
+        config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+      }
+      config.selectedBackend = name;
+      fs.mkdirSync(configDir, { recursive: true });
+      fs.writeFileSync(configPath, JSON.stringify(config, Object.keys(config).sort(), 2) + '\n');
+    } catch (err) {
+      console.warn('Could not persist backend selection:', err);
+    }
+  }
+
   private getCommand(model: string): string {
     if (this.isDev || this.useUvSpawn) {
-      return 'uv';
+      return this.findUv() || 'uv';
     }
     // Production pocket-tts: use bundled Python
     const resourcePath = process.resourcesPath;
@@ -88,16 +137,40 @@ export class PythonServer {
     return ['--port', this.port.toString(), '--model', safeModel];
   }
 
+  /** Resolved absolute path to uv binary (cached after first lookup). */
+  private uvPath: string | null = null;
+
   /**
-   * Check if uv is available on PATH (needed for fish-speech in production builds).
+   * Find the uv binary. Checks common install locations since macOS apps
+   * launched via double-click don't inherit the user's shell PATH.
    */
-  private isUvAvailable(): boolean {
-    try {
-      execFileSync('uv', ['--version'], { stdio: 'ignore', timeout: 5000 });
-      return true;
-    } catch {
-      return false;
+  private findUv(): string | null {
+    if (this.uvPath !== null) return this.uvPath;
+
+    const candidates = [
+      'uv', // PATH (works when launched from terminal)
+      path.join(app.getPath('home'), '.local', 'bin', 'uv'),   // uv default install
+      path.join(app.getPath('home'), '.cargo', 'bin', 'uv'),   // cargo install
+      '/usr/local/bin/uv',
+      '/opt/homebrew/bin/uv',
+    ];
+
+    for (const candidate of candidates) {
+      try {
+        execFileSync(candidate, ['--version'], { stdio: 'ignore', timeout: 5000 });
+        this.uvPath = candidate;
+        console.log(`[uv] Found at: ${candidate}`);
+        return candidate;
+      } catch {
+        // Not here, try next
+      }
     }
+    console.warn('[uv] Not found in any known location');
+    return null;
+  }
+
+  private isUvAvailable(): boolean {
+    return this.findUv() !== null;
   }
 
   /**

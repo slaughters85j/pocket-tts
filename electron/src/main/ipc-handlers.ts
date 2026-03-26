@@ -370,7 +370,30 @@ export function registerIpcHandlers(
       }
       try {
         const response = await fetch(`http://localhost:${pythonServer.port}/backends`);
-        return await response.json();
+        const result = await response.json();
+
+        // In production, the PyInstaller server only reports pocket-tts.
+        // If uv is available, fish-speech is also an option (via server restart).
+        const isDev = !require('electron').app.isPackaged;
+        if (!isDev && !result.available.includes('fish-speech')) {
+          const homeDir = require('os').homedir();
+          const uvCandidates = [
+            'uv',
+            path.join(homeDir, '.local', 'bin', 'uv'),
+            path.join(homeDir, '.cargo', 'bin', 'uv'),
+            '/usr/local/bin/uv',
+            '/opt/homebrew/bin/uv',
+          ];
+          const hasUv = uvCandidates.some((candidate) => {
+            try {
+              require('child_process').execFileSync(candidate, ['--version'], { stdio: 'ignore', timeout: 5000 });
+              return true;
+            } catch { return false; }
+          });
+          if (hasUv) result.available.push('fish-speech');
+        }
+
+        return result;
       } catch {
         return { available: ['pocket-tts'], active: null, supports_tags: false };
       }
@@ -379,41 +402,36 @@ export function registerIpcHandlers(
 
   ipcMain.handle('backend:switch', async (_event: IpcMainInvokeEvent, name: string) => {
     const pythonServer = getPythonServer();
-    if (!pythonServer || !pythonServer.port) {
+    if (!pythonServer) {
       throw new Error('TTS server is not running');
     }
-    const response = await fetch(`http://localhost:${pythonServer.port}/switch-backend`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ backend: name }),
-    });
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`Backend switch failed: ${response.status} - ${errorText}`);
-    }
-    const result = await response.json();
 
-    // Persist selection to shared config.json so Menu Bar / Quick Action / next launch pick it up
-    try {
-      const configDir = path.join(
-        os.homedir(),
-        'Library',
-        'Application Support',
-        'pocket-tts-electron'
-      );
-      const configPath = path.join(configDir, 'config.json');
-      let config: Record<string, unknown> = {};
-      if (fs.existsSync(configPath)) {
-        config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+    // In dev mode, the server can hot-swap backends via the API.
+    // In production, switching between pocket-tts (PyInstaller) and fish-speech (uv)
+    // requires a full server restart since they're different processes.
+    const isDev = !require('electron').app.isPackaged;
+
+    if (isDev) {
+      // Dev: hot-swap via API
+      const response = await fetch(`http://localhost:${pythonServer.port}/switch-backend`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ backend: name }),
+      });
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Backend switch failed: ${response.status} - ${errorText}`);
       }
-      config.selectedBackend = name;
-      fs.mkdirSync(configDir, { recursive: true });
-      fs.writeFileSync(configPath, JSON.stringify(config, Object.keys(config).sort(), 2) + '\n');
-    } catch (err) {
-      console.warn('Could not persist backend selection to config.json:', err);
-    }
+      const result = await response.json();
 
-    return result;
+      // Persist to config
+      pythonServer.persistBackendSelection(name);
+      return result;
+    } else {
+      // Production: restart server process with new backend
+      await pythonServer.restart(name);
+      return { status: 'ok', backend: name };
+    }
   });
 }
 
