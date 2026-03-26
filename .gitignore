@@ -83,6 +83,9 @@ profile_output*
 *.model
 *.pt
 
+# Fish-speech model (entire directory — user downloads all files from HuggingFace)
+models/fish-audio-s2-pro-8bit/
+
 # Agents files, use a symlink to AGENTS.md instead. 
 QWEN.md
 .claude/

@@ -6,6 +6,10 @@ export interface TTSParams {
   voiceFile?: ArrayBuffer;
   savedVoiceId?: string;
   rmsTargetDb?: number;
+  // Fish-speech generation params (ignored by pocket-tts)
+  fishTemperature?: number;
+  fishTopP?: number;
+  fishTopK?: number;
 }
 
 export interface EnhancementMeta {
@@ -42,6 +46,9 @@ export interface MultiTTSParams {
   script: string;
   speakers: SpeakerConfig[];
   crossfade_ms?: number;
+  fishTemperature?: number;
+  fishTopP?: number;
+  fishTopK?: number;
 }
 
 export interface ElectronAPI {
@@ -53,6 +60,7 @@ export interface ElectronAPI {
   onTTSComplete: (callback: () => void) => void;
   onTTSCancelled: (callback: () => void) => void;
   onTTSError: (callback: (error: string) => void) => void;
+  onTTSStatus: (callback: (message: string) => void) => void;
   removeAllListeners: () => void;
   // Voice management
   saveVoice: (params: { name: string; description: string; audioData: ArrayBuffer }) => Promise<SavedVoice>;
@@ -81,6 +89,9 @@ export interface ElectronAPI {
   onSetupProgress: (callback: (status: string, details?: Record<string, unknown>) => void) => void;
   // Audio normalization per-voice
   updateVoiceNormalization: (params: { voiceId: string; rmsTargetDb: number; denoise: boolean }) => Promise<SavedVoice>;
+  // Backend management
+  getBackends: () => Promise<{ available: string[]; active: string | null; supports_tags: boolean }>;
+  switchBackend: (name: string) => Promise<{ status: string; backend?: string; message?: string }>;
 }
 
 contextBridge.exposeInMainWorld('electronAPI', {
@@ -100,11 +111,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onTTSError: (callback: (error: string) => void) => {
     ipcRenderer.on('tts:error', (_event, error) => callback(error));
   },
+  onTTSStatus: (callback: (message: string) => void) => {
+    ipcRenderer.on('tts:status', (_event, message) => callback(message));
+  },
   removeAllListeners: () => {
     ipcRenderer.removeAllListeners('tts:chunk');
     ipcRenderer.removeAllListeners('tts:complete');
     ipcRenderer.removeAllListeners('tts:cancelled');
     ipcRenderer.removeAllListeners('tts:error');
+    ipcRenderer.removeAllListeners('tts:status');
   },
   // Voice management
   saveVoice: (params: { name: string; description: string; audioData: ArrayBuffer }) =>
@@ -140,4 +155,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Audio normalization per-voice
   updateVoiceNormalization: (params: { voiceId: string; rmsTargetDb: number; denoise: boolean }) =>
     ipcRenderer.invoke('voice:update-normalization', params),
+  // Backend management
+  getBackends: () => ipcRenderer.invoke('backend:list'),
+  switchBackend: (name: string) => ipcRenderer.invoke('backend:switch', name),
 } as ElectronAPI);

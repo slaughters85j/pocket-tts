@@ -104,6 +104,16 @@ else
     STATUS_PYTHON="failed"
 fi
 
+# Install MLX optional dependencies (Fish Audio S2 Pro backend — Apple Silicon only)
+if [ "$(uname -m)" = "arm64" ] && [ "$(uname -s)" = "Darwin" ]; then
+    echo "  Installing MLX dependencies (Fish Audio S2 Pro backend)..."
+    if uv sync --group mlx 2>&1; then
+        ok "MLX dependencies installed (fish-speech backend available)"
+    else
+        warn "MLX dependency install failed — fish-speech backend will not be available"
+    fi
+fi
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Step 2: Electron app
 # ═══════════════════════════════════════════════════════════════════════════════

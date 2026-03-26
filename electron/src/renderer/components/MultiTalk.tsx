@@ -8,8 +8,9 @@ import { GenerationStatus } from '../App';
 import { PREDEFINED_VOICES, SavedVoice } from './VoiceSelector';
 import { addToHistory } from './History';
 import { PauseModal } from './PauseModal';
+import { BackendSelector, BackendInfo, FishGenParams } from './BackendSelector';
 
-interface MultiTalkConfig {
+interface MultiTalkExportConfig {
   version: string;
   speakers: {
     name: string;
@@ -45,11 +46,15 @@ export interface MultiTalkConfig {
 interface MultiTalkProps {
   pendingConfig?: MultiTalkConfig | null;
   onConfigLoaded?: () => void;
+  onBackendChange?: (info: BackendInfo) => void;
+  backendName?: string | null;
+  fishParams?: FishGenParams;
+  onFishParamsChange?: (params: FishGenParams) => void;
 }
 
 let nextSpeakerId = 1;
 
-export function MultiTalk({ pendingConfig, onConfigLoaded }: MultiTalkProps) {
+export function MultiTalk({ pendingConfig, onConfigLoaded, onBackendChange, backendName, fishParams, onFishParamsChange }: MultiTalkProps) {
   const [speakers, setSpeakers] = useState<Speaker[]>([
     {
       id: `speaker-${nextSpeakerId++}`,
@@ -288,6 +293,10 @@ export function MultiTalk({ pendingConfig, onConfigLoaded }: MultiTalkProps) {
               seed: s.seed,
             };
           }),
+          backend: backendName || undefined,
+          fishTemperature: backendName === 'fish-speech' ? fishParams?.temperature : undefined,
+          fishTopP: backendName === 'fish-speech' ? fishParams?.topP : undefined,
+          fishTopK: backendName === 'fish-speech' ? fishParams?.topK : undefined,
         });
       },
       onError: (error) => {
@@ -368,6 +377,9 @@ export function MultiTalk({ pendingConfig, onConfigLoaded }: MultiTalkProps) {
         script,
         speakers: speakersData,
         crossfade_ms: 100,
+        fishTemperature: fishParams?.temperature,
+        fishTopP: fishParams?.topP,
+        fishTopK: fishParams?.topK,
       });
     } catch (error) {
       setGenerationState((prev) => ({
@@ -402,7 +414,7 @@ export function MultiTalk({ pendingConfig, onConfigLoaded }: MultiTalkProps) {
   }, []);
 
   const handleExport = useCallback(() => {
-    const config: MultiTalkConfig = {
+    const config: MultiTalkExportConfig = {
       version: '1.0',
       speakers: speakers.map((s) => ({
         name: s.name,
@@ -442,7 +454,7 @@ export function MultiTalk({ pendingConfig, onConfigLoaded }: MultiTalkProps) {
         try {
           const config = JSON.parse(
             event.target?.result as string
-          ) as MultiTalkConfig;
+          ) as MultiTalkExportConfig;
 
           // Convert config speakers to UI speakers
           const newSpeakers: Speaker[] = config.speakers.map((s) => {
@@ -502,155 +514,171 @@ export function MultiTalk({ pendingConfig, onConfigLoaded }: MultiTalkProps) {
     generationState.status === 'streaming';
 
   return (
-    <div className="space-y-6">
-      {/* Import/Export Buttons */}
-      <div className="flex justify-end space-x-2">
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept=".json"
-          onChange={handleImport}
-          className="hidden"
-        />
-        <button
-          onClick={() => fileInputRef.current?.click()}
-          disabled={isGenerating}
-          className={`px-3 py-1.5 text-sm border border-border-color rounded-lg text-text-secondary
-            hover:bg-bg-secondary transition-colors
-            ${isGenerating ? 'opacity-50 cursor-not-allowed' : ''}`}
-        >
-          Import JSON
-        </button>
-        <button
-          onClick={handleExport}
-          disabled={isGenerating || speakers.length === 0}
-          className={`px-3 py-1.5 text-sm border border-border-color rounded-lg text-text-secondary
-            hover:bg-bg-secondary transition-colors
-            ${isGenerating || speakers.length === 0 ? 'opacity-50 cursor-not-allowed' : ''}`}
-        >
-          Export JSON
-        </button>
-      </div>
+    <div className="flex flex-col" style={{ minHeight: 'calc(100vh - 180px)' }}>
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".json"
+        onChange={handleImport}
+        className="hidden"
+      />
 
-      {/* Speakers Section */}
-      <div className="bg-bg-secondary rounded-lg p-4">
-        <div className="flex justify-between items-center mb-4">
-          <h2 className="text-sm font-medium text-text-primary">Speakers</h2>
-          <button
-            onClick={addSpeaker}
+      {/* Two-Column Layout */}
+      <div className="flex gap-6 flex-1 min-h-0">
+
+        {/* Left Column: Speakers + Settings + Synthesize */}
+        <div className="w-[380px] flex-shrink-0 flex flex-col space-y-4">
+          {/* Speakers Section */}
+          <div className="bg-bg-secondary rounded-lg p-4">
+            <div className="flex justify-between items-center mb-4">
+              <h2 className="text-sm font-medium text-text-primary">Speakers</h2>
+              <button
+                onClick={addSpeaker}
+                disabled={isGenerating}
+                className={`px-3 py-1.5 text-sm bg-accent text-white rounded-lg
+                  hover:bg-accent-hover transition-colors
+                  ${isGenerating ? 'opacity-50 cursor-not-allowed' : ''}`}
+              >
+                + Add Speaker
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              {speakers.map((speaker) => (
+                <SpeakerCard
+                  key={speaker.id}
+                  speaker={speaker}
+                  onUpdate={(updates) => updateSpeaker(speaker.id, updates)}
+                  onRemove={() => removeSpeaker(speaker.id)}
+                  onInsertToScript={insertSpeakerToScript}
+                  canRemove={speakers.length > 1}
+                  disabled={isGenerating}
+                  savedVoices={savedVoices}
+                />
+              ))}
+            </div>
+          </div>
+
+          {/* Model Selector */}
+          <BackendSelector
             disabled={isGenerating}
-            className={`px-3 py-1.5 text-sm bg-accent text-white rounded-lg
-              hover:bg-accent-hover transition-colors
-              ${isGenerating ? 'opacity-50 cursor-not-allowed' : ''}`}
-          >
-            + Add Speaker
-          </button>
+            onBackendChange={onBackendChange}
+            fishParams={fishParams}
+            onFishParamsChange={onFishParamsChange}
+          />
+
+          {/* Volume Normalization Strategy */}
+          <div className="bg-bg-secondary rounded-lg p-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <label className="block text-sm font-medium text-text-primary">
+                  Volume Normalization
+                </label>
+                <p className="text-xs text-text-secondary mt-0.5">
+                  How to handle different loudness levels across speakers
+                </p>
+              </div>
+              <select
+                value={normStrategy}
+                onChange={(e) => setNormStrategy(e.target.value as typeof normStrategy)}
+                disabled={isGenerating}
+                className={`bg-bg-tertiary text-text-primary border border-border-color rounded-lg px-3 py-1.5 text-sm
+                  focus:outline-none focus:ring-2 focus:ring-accent focus:border-transparent
+                  ${isGenerating ? 'opacity-50 cursor-not-allowed' : ''}`}
+              >
+                <option value="per_voice">Per Voice</option>
+                <option value="match_quietest">Match Quietest</option>
+                <option value="match_loudest">Match Loudest</option>
+              </select>
+            </div>
+          </div>
+
+          {/* Generate / Playback Controls */}
+          <SynthesizeButton
+            onClick={handleGenerate}
+            onStop={handleStop}
+            onPause={handlePause}
+            onResume={handleResume}
+            status={generationState.status}
+            isPaused={isPaused}
+            disabled={!script.trim()}
+          />
+
+          {/* Status Indicator */}
+          <StatusIndicator
+            status={generationState.status}
+            timeToFirstAudio={generationState.timeToFirstAudio}
+            totalTime={generationState.totalTime}
+            error={generationState.error}
+            isPaused={isPaused}
+          />
+
+          {/* Audio Player */}
+          {audioBlob && (
+            <div>
+              <AudioPlayer audioBlob={audioBlob} />
+            </div>
+          )}
         </div>
 
-        <div className="space-y-3">
-          {speakers.map((speaker) => (
-            <SpeakerCard
-              key={speaker.id}
-              speaker={speaker}
-              onUpdate={(updates) => updateSpeaker(speaker.id, updates)}
-              onRemove={() => removeSpeaker(speaker.id)}
-              onInsertToScript={insertSpeakerToScript}
-              canRemove={speakers.length > 1}
+        {/* Right Column: Script (fills remaining width and height) */}
+        <div className="flex-1 flex flex-col min-w-0 pb-6">
+          <div className="bg-bg-secondary rounded-lg p-4 flex flex-col flex-1">
+            <div className="flex items-center justify-between mb-3">
+              <label className="block text-sm font-medium text-text-primary">
+                Script
+              </label>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={isGenerating}
+                  className={`px-2.5 py-1 text-xs border border-border-color rounded-lg text-text-secondary
+                    hover:bg-bg-tertiary hover:text-text-primary transition-colors
+                    ${isGenerating ? 'opacity-50 cursor-not-allowed' : ''}`}
+                >
+                  Import JSON
+                </button>
+                <button
+                  onClick={handleExport}
+                  disabled={isGenerating || speakers.length === 0}
+                  className={`px-2.5 py-1 text-xs border border-border-color rounded-lg text-text-secondary
+                    hover:bg-bg-tertiary hover:text-text-primary transition-colors
+                    ${isGenerating || speakers.length === 0 ? 'opacity-50 cursor-not-allowed' : ''}`}
+                >
+                  Export JSON
+                </button>
+                <button
+                  onClick={() => setShowPauseModal(true)}
+                  disabled={isGenerating}
+                  className={`px-2.5 py-1 text-xs border border-border-color rounded-lg text-text-secondary
+                    hover:bg-bg-tertiary hover:text-text-primary transition-colors
+                    ${isGenerating ? 'opacity-50 cursor-not-allowed' : ''}`}
+                  title="Insert a pause marker"
+                >
+                  + Pause
+                </button>
+              </div>
+            </div>
+            <textarea
+              ref={scriptTextareaRef}
+              value={script}
+              onChange={(e) => setScript(e.target.value)}
               disabled={isGenerating}
-              savedVoices={savedVoices}
+              placeholder={`{Alice} Hello Bob, how are you today?\n{Bob} I'm doing great, thanks for asking!\n{Alice} That's wonderful to hear.`}
+              className={`w-full flex-1 bg-bg-tertiary text-text-primary border border-border-color rounded-lg px-4 py-3 text-sm font-mono
+                placeholder:text-text-secondary/50
+                focus:outline-none focus:ring-2 focus:ring-accent focus:border-transparent
+                resize-none min-h-[900px]
+                ${isGenerating ? 'opacity-50 cursor-not-allowed' : ''}`}
             />
-          ))}
-        </div>
-      </div>
-
-      {/* Script Section */}
-      <div className="bg-bg-secondary rounded-lg p-4">
-        <div className="flex items-center justify-between mb-3">
-          <label className="block text-sm font-medium text-text-primary">
-            Script
-          </label>
-          <button
-            onClick={() => setShowPauseModal(true)}
-            disabled={isGenerating}
-            className={`px-2.5 py-1 text-xs border border-border-color rounded-lg text-text-secondary
-              hover:bg-bg-tertiary hover:text-text-primary transition-colors
-              ${isGenerating ? 'opacity-50 cursor-not-allowed' : ''}`}
-            title="Insert a pause marker"
-          >
-            + Pause
-          </button>
-        </div>
-        <textarea
-          ref={scriptTextareaRef}
-          value={script}
-          onChange={(e) => setScript(e.target.value)}
-          disabled={isGenerating}
-          placeholder={`{Alice} Hello Bob, how are you today?\n{Bob} I'm doing great, thanks for asking!\n{Alice} That's wonderful to hear.`}
-          rows={6}
-          className={`w-full bg-bg-tertiary text-text-primary border border-border-color rounded-lg px-4 py-3 text-sm font-mono
-            placeholder:text-text-secondary/50
-            focus:outline-none focus:ring-2 focus:ring-accent focus:border-transparent
-            resize-y min-h-[300px]
-            ${isGenerating ? 'opacity-50 cursor-not-allowed' : ''}`}
-        />
-        <p className="mt-2 text-xs text-text-secondary">
-          Use {'{SpeakerName}'} to indicate who speaks. Names must match
-          speakers defined above.
-        </p>
-      </div>
-
-      {/* Volume Normalization Strategy */}
-      <div className="bg-bg-secondary rounded-lg p-4">
-        <div className="flex items-center justify-between">
-          <div>
-            <label className="block text-sm font-medium text-text-primary">
-              Volume Normalization
-            </label>
-            <p className="text-xs text-text-secondary mt-0.5">
-              How to handle different loudness levels across speakers
+            <p className="mt-2 text-xs text-text-secondary">
+              Use {'{SpeakerName}'} to indicate who speaks. Names must match
+              speakers defined above.
             </p>
           </div>
-          <select
-            value={normStrategy}
-            onChange={(e) => setNormStrategy(e.target.value as typeof normStrategy)}
-            disabled={isGenerating}
-            className={`bg-bg-tertiary text-text-primary border border-border-color rounded-lg px-3 py-1.5 text-sm
-              focus:outline-none focus:ring-2 focus:ring-accent focus:border-transparent
-              ${isGenerating ? 'opacity-50 cursor-not-allowed' : ''}`}
-          >
-            <option value="per_voice">Per Voice</option>
-            <option value="match_quietest">Match Quietest</option>
-            <option value="match_loudest">Match Loudest</option>
-          </select>
         </div>
+
       </div>
-
-      {/* Generate / Playback Controls */}
-      <SynthesizeButton
-        onClick={handleGenerate}
-        onStop={handleStop}
-        onPause={handlePause}
-        onResume={handleResume}
-        status={generationState.status}
-        isPaused={isPaused}
-        disabled={!script.trim()}
-      />
-
-      {/* Status Indicator */}
-      <StatusIndicator
-        status={generationState.status}
-        timeToFirstAudio={generationState.timeToFirstAudio}
-        totalTime={generationState.totalTime}
-        error={generationState.error}
-        isPaused={isPaused}
-      />
-
-      {/* Audio Player */}
-      {audioBlob && (
-        <div className="mt-6">
-          <AudioPlayer audioBlob={audioBlob} />
-        </div>
-      )}
 
       {/* Pause Insert Modal */}
       <PauseModal

@@ -15,10 +15,7 @@ from num2words import num2words
 # These are loaded from text_normalizer_local.py if it exists
 # That file is gitignored so sensitive terms aren't committed
 try:
-    from pocket_tts.text_normalizer_local import (
-        SPOKEN_ACRONYMS_LOCAL,
-        ISR_TERMS_LOCAL,
-    )
+    from pocket_tts.text_normalizer_local import ISR_TERMS_LOCAL, SPOKEN_ACRONYMS_LOCAL
 except ImportError:
     SPOKEN_ACRONYMS_LOCAL: set[str] = set()
     ISR_TERMS_LOCAL: dict[str, str] = {}

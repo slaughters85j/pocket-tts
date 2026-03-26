@@ -1,5 +1,6 @@
 import { spawn, ChildProcess } from 'child_process';
 import { app } from 'electron';
+import * as fs from 'fs';
 import * as path from 'path';
 import * as net from 'net';
 
@@ -65,11 +66,38 @@ export class PythonServer {
   }
 
   private getArgs(): string[] {
+    const model = this.getConfiguredBackend();
     if (this.isDev) {
-      return ['run', 'pocket-tts', 'serve', '--port', this.port.toString()];
+      return ['run', 'pocket-tts', 'serve', '--port', this.port.toString(), '--model', model];
     }
     // Note: entry script already adds "serve" command, so just pass options
-    return ['--port', this.port.toString()];
+    return ['--port', this.port.toString(), '--model', model];
+  }
+
+  /**
+   * Read the selected backend from shared config.json.
+   * Falls back to 'pocket-tts' if config is missing or unreadable.
+   */
+  private getConfiguredBackend(): string {
+    try {
+      const configDir = path.join(
+        app.getPath('home'),
+        'Library',
+        'Application Support',
+        'pocket-tts-electron'
+      );
+      const configPath = path.join(configDir, 'config.json');
+      if (fs.existsSync(configPath)) {
+        const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+        if (config.selectedBackend && typeof config.selectedBackend === 'string') {
+          console.log(`Config: starting with backend '${config.selectedBackend}'`);
+          return config.selectedBackend;
+        }
+      }
+    } catch (err) {
+      console.warn('Could not read backend from config.json, defaulting to pocket-tts:', err);
+    }
+    return 'pocket-tts';
   }
 
   private getWorkingDirectory(): string {
@@ -97,7 +125,7 @@ export class PythonServer {
     });
   }
 
-  private async waitForReady(timeout = 30000): Promise<void> {
+  private async waitForReady(timeout = 60000): Promise<void> {
     const startTime = Date.now();
     const healthUrl = `http://localhost:${this.port}/health`;
 

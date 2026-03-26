@@ -114,10 +114,20 @@ if [ ! -f "$PLIST_TEMPLATE" ]; then
     exit 1
 fi
 
+# Read selected backend from config.json (default: pocket-tts)
+CONFIG_FILE="$HOME/Library/Application Support/pocket-tts-electron/config.json"
+if [ -f "$CONFIG_FILE" ]; then
+    MODEL_BACKEND=$(python3 -c "import json; print(json.load(open('$CONFIG_FILE')).get('selectedBackend', 'pocket-tts'))" 2>/dev/null || echo "pocket-tts")
+else
+    MODEL_BACKEND="pocket-tts"
+fi
+echo "  Backend: $MODEL_BACKEND"
+
 # Replace template variables
 sed -e "s|{{USERNAME}}|$USERNAME|g" \
     -e "s|{{UV_PATH}}|$UV_PATH|g" \
     -e "s|{{PROJECT_ROOT}}|$PROJECT_ROOT|g" \
+    -e "s|{{MODEL_BACKEND}}|$MODEL_BACKEND|g" \
     "$PLIST_TEMPLATE" > "$PLIST_TARGET"
 
 print_success "Installed plist: $PLIST_TARGET"

@@ -13,6 +13,9 @@ interface TTSParams {
   voiceFile?: ArrayBuffer;
   savedVoiceId?: string;
   rmsTargetDb?: number;
+  fishTemperature?: number;
+  fishTopP?: number;
+  fishTopK?: number;
 }
 
 interface SpeakerConfig {
@@ -27,6 +30,9 @@ interface MultiTTSParams {
   script: string;
   speakers: SpeakerConfig[];
   crossfade_ms?: number;
+  fishTemperature?: number;
+  fishTopP?: number;
+  fishTopK?: number;
 }
 
 // Module-level abort controller for cancelling in-flight TTS requests
@@ -37,7 +43,7 @@ export function registerIpcHandlers(
   voiceManager: { getVoiceFilePath: (id: string) => string | null }
 ) {
   ipcMain.handle('tts:generate', async (event: IpcMainInvokeEvent, params: TTSParams) => {
-    const { text, voiceUrl, voiceFile, savedVoiceId, rmsTargetDb } = params;
+    const { text, voiceUrl, voiceFile, savedVoiceId, rmsTargetDb, fishTemperature, fishTopP, fishTopK } = params;
     const sender = event.sender;
 
     const pythonServer = getPythonServer();
@@ -69,6 +75,35 @@ export function registerIpcHandlers(
           const buffer = fs.readFileSync(filePath);
           const blob = new Blob([buffer], { type: 'audio/wav' });
           formData.append('voice_wav', blob, 'voice.wav');
+
+          // Check if fish-speech needs a one-time Whisper transcription for this voice
+          try {
+            const backendsRes = await fetch(`http://localhost:${pythonServer.port}/backends`);
+            const backends = await backendsRes.json();
+            if (backends.active === 'fish-speech') {
+              const statusRes = await fetch(
+                `http://localhost:${pythonServer.port}/transcript-status?voice_path=${encodeURIComponent(filePath)}`
+              );
+              const status = await statusRes.json();
+              if (!status.cached && !sender.isDestroyed()) {
+                // Read voice name from metadata for a friendly message
+                const voicesPath = path.join(
+                  os.homedir(), 'Library', 'Application Support', 'pocket-tts-electron', 'voices.json'
+                );
+                let voiceName = savedVoiceId;
+                try {
+                  if (fs.existsSync(voicesPath)) {
+                    const voicesData = JSON.parse(fs.readFileSync(voicesPath, 'utf-8'));
+                    const voice = voicesData.voices?.find((v: { id: string; name: string }) => v.id === savedVoiceId);
+                    if (voice?.name) voiceName = voice.name;
+                  }
+                } catch { /* fall back to ID */ }
+                sender.send('tts:status',
+                  `Capturing '${voiceName}' transcript with Whisper — needed once per voice, not on subsequent runs`
+                );
+              }
+            }
+          } catch { /* non-critical — generation proceeds regardless */ }
         } else {
           throw new Error('Saved voice file not found');
         }
@@ -80,6 +115,11 @@ export function registerIpcHandlers(
       if (rmsTargetDb !== undefined) {
         formData.append('rms_target_db', rmsTargetDb.toString());
       }
+
+      // Fish-speech generation params
+      if (fishTemperature !== undefined) formData.append('fish_temperature', fishTemperature.toString());
+      if (fishTopP !== undefined) formData.append('fish_top_p', fishTopP.toString());
+      if (fishTopK !== undefined) formData.append('fish_top_k', fishTopK.toString());
 
       const response = await fetch(`http://localhost:${pythonServer.port}/tts`, {
         method: 'POST',
@@ -130,7 +170,7 @@ export function registerIpcHandlers(
 
   // Multi-Talk TTS handler
   ipcMain.handle('tts:generate-multi', async (event: IpcMainInvokeEvent, params: MultiTTSParams) => {
-    const { script, speakers, crossfade_ms = 100 } = params;
+    const { script, speakers, crossfade_ms = 100, fishTemperature, fishTopP, fishTopK } = params;
     const sender = event.sender;
 
     const pythonServer = getPythonServer();
@@ -173,6 +213,11 @@ export function registerIpcHandlers(
       formData.append('script', script);
       formData.append('speakers', JSON.stringify(resolvedSpeakers));
       formData.append('crossfade_ms', crossfade_ms.toString());
+
+      // Fish-speech generation params
+      if (fishTemperature !== undefined) formData.append('fish_temperature', fishTemperature.toString());
+      if (fishTopP !== undefined) formData.append('fish_top_p', fishTopP.toString());
+      if (fishTopK !== undefined) formData.append('fish_top_k', fishTopK.toString());
 
       const response = await fetch(`http://localhost:${pythonServer.port}/multi-tts`, {
         method: 'POST',
@@ -310,6 +355,65 @@ export function registerIpcHandlers(
         });
       });
     });
+  });
+
+  // ------------------------------------------------------------------
+  // Backend management
+  // ------------------------------------------------------------------
+
+  ipcMain.handle(
+    'backend:list',
+    async (): Promise<{ available: string[]; active: string | null; supports_tags: boolean }> => {
+      const pythonServer = getPythonServer();
+      if (!pythonServer || !pythonServer.port) {
+        return { available: ['pocket-tts'], active: null, supports_tags: false };
+      }
+      try {
+        const response = await fetch(`http://localhost:${pythonServer.port}/backends`);
+        return await response.json();
+      } catch {
+        return { available: ['pocket-tts'], active: null, supports_tags: false };
+      }
+    }
+  );
+
+  ipcMain.handle('backend:switch', async (_event: IpcMainInvokeEvent, name: string) => {
+    const pythonServer = getPythonServer();
+    if (!pythonServer || !pythonServer.port) {
+      throw new Error('TTS server is not running');
+    }
+    const response = await fetch(`http://localhost:${pythonServer.port}/switch-backend`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ backend: name }),
+    });
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Backend switch failed: ${response.status} - ${errorText}`);
+    }
+    const result = await response.json();
+
+    // Persist selection to shared config.json so Menu Bar / Quick Action / next launch pick it up
+    try {
+      const configDir = path.join(
+        os.homedir(),
+        'Library',
+        'Application Support',
+        'pocket-tts-electron'
+      );
+      const configPath = path.join(configDir, 'config.json');
+      let config: Record<string, unknown> = {};
+      if (fs.existsSync(configPath)) {
+        config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+      }
+      config.selectedBackend = name;
+      fs.mkdirSync(configDir, { recursive: true });
+      fs.writeFileSync(configPath, JSON.stringify(config, Object.keys(config).sort(), 2) + '\n');
+    } catch (err) {
+      console.warn('Could not persist backend selection to config.json:', err);
+    }
+
+    return result;
   });
 }
 
@@ -497,6 +601,7 @@ export function registerEnhancementHandlers(
       });
     }
   );
+
 }
 
 // Clean up temp files on app quit

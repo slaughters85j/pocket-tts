@@ -42,6 +42,7 @@ interface VoiceSelectorProps {
   onEditEnhancement?: (id: string) => void;
   enhanceStatus?: EnhanceStatus;
   onEnhanceStatusChange?: (status: EnhanceStatus) => void;
+  hidePredefinedVoices?: boolean;
 }
 
 export function VoiceSelector({
@@ -55,6 +56,7 @@ export function VoiceSelector({
   onEditEnhancement,
   enhanceStatus = 'unavailable',
   onEnhanceStatusChange,
+  hidePredefinedVoices = false,
 }: VoiceSelectorProps) {
   const [isSettingUp, setIsSettingUp] = useState(false);
   const [setupMessage, setSetupMessage] = useState('');
@@ -100,6 +102,7 @@ export function VoiceSelector({
           focus:outline-none focus:ring-2 focus:ring-accent focus:border-transparent
           ${disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
       >
+        {!hidePredefinedVoices && (
         <optgroup label="Built-in Voices">
           {[...PREDEFINED_VOICES].sort((a, b) => a.name.localeCompare(b.name)).map((voice) => (
             <option key={voice.id} value={voice.id}>
@@ -107,6 +110,7 @@ export function VoiceSelector({
             </option>
           ))}
         </optgroup>
+        )}
         {savedVoices.length > 0 && (
           <optgroup label="My Saved Voices">
             {[...savedVoices].sort((a, b) => a.name.localeCompare(b.name)).map((voice) => (

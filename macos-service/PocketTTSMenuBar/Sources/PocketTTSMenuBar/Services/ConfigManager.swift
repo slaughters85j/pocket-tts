@@ -68,6 +68,12 @@ class ConfigManager: ObservableObject {
         Self.saveConfigToDisk(config)
     }
 
+    // Update selected backend
+    func updateSelectedBackend(_ backend: String) {
+        config.selectedBackend = backend
+        Self.saveConfigToDisk(config)
+    }
+
     // Reload config from disk
     func reload() {
         config = Self.loadConfig()

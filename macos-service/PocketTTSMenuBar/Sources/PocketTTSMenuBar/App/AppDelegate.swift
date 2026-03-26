@@ -250,6 +250,26 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         selectVoiceItem.submenu = voiceMenu
         self.menu.addItem(selectVoiceItem)
 
+        // Select Model submenu
+        let modelMenu = NSMenu()
+        let selectedBackend = configManager.config.selectedBackend ?? Constants.defaultBackend
+        for backend in Constants.availableBackends {
+            let modelItem = NSMenuItem(
+                title: backend.label,
+                action: #selector(selectBackend(_:)),
+                keyEquivalent: ""
+            )
+            modelItem.target = self
+            modelItem.representedObject = backend.id
+            if backend.id == selectedBackend {
+                modelItem.state = .on
+            }
+            modelMenu.addItem(modelItem)
+        }
+        let selectModelItem = NSMenuItem(title: "Select Model", action: nil, keyEquivalent: "")
+        selectModelItem.submenu = modelMenu
+        self.menu.addItem(selectModelItem)
+
         self.menu.addItem(NSMenuItem.separator())
 
         // Stop Speaking
@@ -346,6 +366,36 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         Task { @MainActor in
             configManager.updateSelectedVoice(id: voice.id, type: voice.type)
+            updateMenu()
+        }
+    }
+
+    @objc private func selectBackend(_ sender: NSMenuItem) {
+        guard let backendId = sender.representedObject as? String else { return }
+
+        Task { @MainActor in
+            configManager.updateSelectedBackend(backendId)
+
+            // Call the server's /switch-backend endpoint
+            let urlString = "\(configManager.serverURL)/switch-backend"
+            guard let url = URL(string: urlString) else { return }
+
+            var request = URLRequest(url: url)
+            request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = try? JSONEncoder().encode(["backend": backendId])
+
+            do {
+                let (_, response) = try await URLSession.shared.data(for: request)
+                if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 {
+                    print("Switched backend to \(backendId)")
+                } else {
+                    print("Backend switch returned non-200 status")
+                }
+            } catch {
+                print("Failed to switch backend: \(error)")
+            }
+
             updateMenu()
         }
     }

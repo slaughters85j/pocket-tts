@@ -13,7 +13,7 @@ import wave
 from dataclasses import dataclass
 from pathlib import Path
 from queue import Queue
-from typing import Optional
+from typing import Any, Optional
 
 import numpy as np
 import typer
@@ -28,6 +28,7 @@ from typing_extensions import Annotated
 from pocket_tts.data.audio import stream_audio_chunks
 from pocket_tts.default_parameters import (
     DEFAULT_AUDIO_PROMPT,
+    DEFAULT_BACKEND,
     DEFAULT_EOS_THRESHOLD,
     DEFAULT_FRAMES_AFTER_EOS,
     DEFAULT_LSD_DECODE_STEPS,
@@ -35,9 +36,10 @@ from pocket_tts.default_parameters import (
     DEFAULT_TEMPERATURE,
     DEFAULT_VARIANT,
 )
+from pocket_tts.models.backend_registry import BackendManager, get_available_backends
 from pocket_tts.models.tts_model import TTSModel
 from pocket_tts.utils.logging_utils import enable_logging
-from pocket_tts.utils.utils import PREDEFINED_VOICES, size_of_dict
+from pocket_tts.utils.utils import PREDEFINED_VOICES
 
 logger = logging.getLogger(__name__)
 
@@ -84,7 +86,11 @@ class SpeakerConfig:
     voice_source: str  # predefined name, URL, or "uploaded"
     voice_data: Optional[str] = None  # Base64-encoded WAV if uploaded
     seed: Optional[int] = None
-    rms_target_db: float = -16.0  # Per-voice RMS normalization target
+    rms_target_db: float | int = -16.0  # Per-voice RMS normalization target
+
+    def __post_init__(self):
+        # JSON doesn't distinguish int/float — coerce so beartype is happy downstream
+        self.rms_target_db = float(self.rms_target_db)
 
 
 @dataclass
@@ -180,9 +186,8 @@ def apply_crossfade(audio1: np.ndarray, audio2: np.ndarray, crossfade_samples: i
 # The pocket-tts server implementation
 # ------------------------------------------------------
 
-# Global model instance
-tts_model = None
-global_model_state = None
+# Global backend manager — replaces the old tts_model / global_model_state globals
+backend_manager = BackendManager()
 
 web_app = FastAPI(
     title="Kyutai Pocket TTS API",
@@ -211,10 +216,91 @@ async def root():
 
 @web_app.get("/health")
 async def health():
-    return {"status": "healthy"}
+    return {"status": "healthy", "backend": backend_manager.active_name}
 
 
-def write_to_queue(queue, text_to_generate, model_state, cancel_event=None):
+@web_app.get("/backends")
+async def list_backends():
+    """Return available and active backend info."""
+    active = backend_manager.active if backend_manager.active_name else None
+    return {
+        "available": get_available_backends(),
+        "active": backend_manager.active_name,
+        "supports_tags": getattr(active, "supports_tags", False) if active else False,
+    }
+
+
+@web_app.post("/switch-backend")
+async def switch_backend(request: starlette_requests.Request):
+    """Switch the active TTS backend at runtime.
+
+    Expects JSON body: ``{"backend": "pocket-tts" | "fish-speech"}``.
+    """
+    if backend_manager.switching:
+        raise HTTPException(status_code=503, detail="Backend switch already in progress")
+
+    body = await request.json()
+    name = body.get("backend")
+    if not name:
+        raise HTTPException(status_code=400, detail="Missing 'backend' field")
+
+    available = get_available_backends()
+    if name not in available:
+        raise HTTPException(
+            status_code=400, detail=f"Unknown backend: {name!r}. Available: {available}"
+        )
+
+    if name == backend_manager.active_name:
+        return {"status": "ok", "message": f"{name} is already active"}
+
+    try:
+        load_kwargs: dict = {}
+        if name == "pocket-tts":
+            load_kwargs["voice"] = DEFAULT_AUDIO_PROMPT
+        backend_manager.activate(name, **load_kwargs)
+        return {"status": "ok", "backend": name}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to switch backend: {e}")
+
+
+@web_app.get("/transcript-status")
+def transcript_status(voice_path: str):
+    """Check if a Whisper transcript is cached for a voice file."""
+    from pocket_tts.utils.transcript_cache import get_transcript
+
+    path = Path(voice_path)
+    if not path.exists():
+        return {"cached": False, "reason": "file_not_found"}
+    transcript = get_transcript(path)
+    return {"cached": transcript is not None}
+
+
+@web_app.post("/transcribe-voice")
+def transcribe_voice(voice_wav: UploadFile = File(...)):
+    """Pre-transcribe a voice WAV file so fish-speech doesn't run Whisper at generation time.
+
+    This is a fire-and-forget optimisation — if it fails, the fish-speech backend
+    will transparently transcribe on first use via a cache-miss path.
+    """
+    from pocket_tts.utils.transcript_cache import get_transcript, transcribe_and_cache
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as temp_file:
+        content = voice_wav.file.read()
+        temp_file.write(content)
+        temp_file.flush()
+        temp_file.close()
+
+        try:
+            wav_path = Path(temp_file.name)
+            transcript = get_transcript(wav_path)
+            if transcript is None:
+                transcript = transcribe_and_cache(wav_path)
+            return {"transcript": transcript, "cached": True}
+        finally:
+            os.unlink(temp_file.name)
+
+
+def write_to_queue(queue, text_to_generate, voice_state, cancel_event=None, **gen_kwargs):
     """Allows writing to the StreamingResponse as if it were a file."""
 
     class FileLikeToQueue(io.IOBase):
@@ -230,14 +316,18 @@ def write_to_queue(queue, text_to_generate, model_state, cancel_event=None):
         def close(self):
             self.queue.put(None)
 
-    audio_chunks = tts_model.generate_audio_stream(
-        model_state=model_state, text_to_generate=text_to_generate, cancel_event=cancel_event
+    active = backend_manager.active
+    audio_chunks = active.generate_audio_stream(
+        voice_state=voice_state, text=text_to_generate, cancel_event=cancel_event, **gen_kwargs
     )
-    stream_audio_chunks(FileLikeToQueue(queue), audio_chunks, tts_model.config.mimi.sample_rate)
+    stream_audio_chunks(FileLikeToQueue(queue), audio_chunks, active.sample_rate)
 
 
 def generate_data_with_state(
-    text_to_generate: str, model_state: dict, request: starlette_requests.Request | None = None
+    text_to_generate: str,
+    voice_state: Any,
+    request: starlette_requests.Request | None = None,
+    **gen_kwargs: Any,
 ):
     queue = Queue()
     cancel_event = threading.Event()
@@ -268,7 +358,9 @@ def generate_data_with_state(
 
     # Run generation in a thread
     thread = threading.Thread(
-        target=write_to_queue, args=(queue, text_to_generate, model_state, cancel_event)
+        target=write_to_queue,
+        args=(queue, text_to_generate, voice_state, cancel_event),
+        kwargs=gen_kwargs,
     )
     thread.start()
 
@@ -290,6 +382,10 @@ def text_to_speech(
     voice_url: str | None = Form(None),
     voice_wav: UploadFile | None = File(None),
     rms_target_db: float = Form(-16.0),
+    # Fish-speech generation params (ignored by pocket-tts backend)
+    fish_temperature: float = Form(0.7),
+    fish_top_p: float = Form(0.7),
+    fish_top_k: int = Form(30),
 ):
     """
     Generate speech from text using the pre-loaded voice prompt or a custom voice.
@@ -300,13 +396,34 @@ def text_to_speech(
         voice_wav: Optional uploaded voice file (mutually exclusive with voice_url)
         rms_target_db: RMS normalization target in dB (-30 to -6). Controls voice loudness.
     """
+    if backend_manager.switching:
+        raise HTTPException(status_code=503, detail="Backend switch in progress, try again shortly")
+
     if not text.strip():
         raise HTTPException(status_code=400, detail="Text cannot be empty")
 
     if voice_url is not None and voice_wav is not None:
         raise HTTPException(status_code=400, detail="Cannot provide both voice_url and voice_wav")
 
-    # Use the appropriate model state
+    active = backend_manager.active
+
+    # Fish-speech requires a custom voice WAV — predefined names and no-voice both produce garbage.
+    # Reject predefined voice names early with a helpful error.
+    if active.backend_name == "fish-speech":
+        if voice_url is not None and voice_url in PREDEFINED_VOICES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Fish Audio S2 Pro does not support predefined voice '{voice_url}'. "
+                "Please select a custom saved voice.",
+            )
+        if voice_url is None and voice_wav is None:
+            raise HTTPException(
+                status_code=400,
+                detail="Fish Audio S2 Pro requires a custom voice for voice cloning. "
+                "Please select a saved voice or upload a voice WAV file.",
+            )
+
+    # Use the appropriate voice state
     if voice_url is not None:
         if not (
             voice_url.startswith("http://")
@@ -317,29 +434,48 @@ def text_to_speech(
             raise HTTPException(
                 status_code=400, detail="voice_url must start with http://, https://, or hf://"
             )
-        model_state = tts_model._cached_get_state_for_audio_prompt(
-            voice_url, truncate=True, target_db=rms_target_db
-        )
+        voice_state = active.cached_get_voice_state(voice_url, target_db=rms_target_db)
         logging.warning("Using voice from URL: %s", voice_url)
     elif voice_wav is not None:
-        # Use uploaded voice file
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as temp_file:
+        # Use uploaded voice file.
+        # For fish-speech the voice state is just the file path (read lazily during
+        # generation), so we must NOT delete the temp file here.  For pocket-tts the
+        # audio is encoded eagerly into hidden-state tensors, so immediate deletion
+        # is fine.  We use delete=False and let the OS clean up /tmp on reboot for
+        # the fish-speech case.
+        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
+        try:
             content = voice_wav.file.read()
             temp_file.write(content)
             temp_file.flush()
+            temp_file.close()
 
-            try:
-                model_state = tts_model.get_state_for_audio_prompt(
-                    Path(temp_file.name), truncate=True, target_db=rms_target_db
-                )
-            finally:
+            voice_state = active.get_voice_state(Path(temp_file.name), target_db=rms_target_db)
+
+            # Pocket-tts encodes eagerly — safe to delete now.
+            # Fish-speech stores the path for lazy read — keep the file.
+            if active.backend_name == "pocket-tts":
                 os.unlink(temp_file.name)
+        except Exception:
+            # Clean up on error regardless of backend
+            try:
+                os.unlink(temp_file.name)
+            except OSError:
+                pass
+            raise
     else:
-        # Use default global model state
-        model_state = global_model_state
+        # Use default voice state
+        voice_state = backend_manager.default_voice_state
 
     return StreamingResponse(
-        generate_data_with_state(text, model_state, request=request),
+        generate_data_with_state(
+            text,
+            voice_state,
+            request=request,
+            temperature=fish_temperature,
+            top_p=fish_top_p,
+            top_k=fish_top_k,
+        ),
         media_type="audio/wav",
         headers={
             "Content-Disposition": "attachment; filename=generated_speech.wav",
@@ -354,6 +490,10 @@ def multi_talk_to_speech(
     script: str = Form(...),
     speakers: str = Form(...),
     crossfade_ms: int = Form(100),
+    # Fish-speech generation params (ignored by pocket-tts backend)
+    fish_temperature: float = Form(0.7),
+    fish_top_p: float = Form(0.7),
+    fish_top_k: int = Form(30),
 ):
     """
     Generate multi-speaker audio from a script with speaker tags.
@@ -363,6 +503,9 @@ def multi_talk_to_speech(
         speakers: JSON array of speaker configs
         crossfade_ms: Crossfade duration between segments in milliseconds
     """
+
+    if backend_manager.switching:
+        raise HTTPException(status_code=503, detail="Backend switch in progress, try again shortly")
 
     if not script.strip():
         raise HTTPException(status_code=400, detail="Script cannot be empty")
@@ -404,8 +547,13 @@ def multi_talk_to_speech(
     if not segments:
         raise HTTPException(status_code=400, detail="Script contains no valid segments")
 
-    # Pre-load voice states for all speakers
-    voice_states = {}
+    active = backend_manager.active
+
+    # Pre-load voice states for all speakers via backend abstraction.
+    # Track temp files that fish-speech needs kept alive until generation finishes.
+    voice_states: dict[str, Any] = {}
+    temp_files_to_cleanup: list[str] = []
+
     for config in speaker_configs:
         if config.name in voice_states:
             continue  # Already loaded
@@ -420,28 +568,30 @@ def multi_talk_to_speech(
                     detail=f"Invalid base64 voice data for speaker '{config.name}': {e}",
                 )
 
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as temp_file:
-                temp_file.write(wav_bytes)
-                temp_file.flush()
-                try:
-                    voice_states[config.name] = tts_model.get_state_for_audio_prompt(
-                        Path(temp_file.name),
-                        truncate=True,
-                        target_db=config.rms_target_db,
-                    )
-                finally:
-                    os.unlink(temp_file.name)
+            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
+            temp_file.write(wav_bytes)
+            temp_file.flush()
+            temp_file.close()
+
+            voice_states[config.name] = active.get_voice_state(
+                Path(temp_file.name), target_db=config.rms_target_db
+            )
+            # Pocket-tts encodes eagerly; fish-speech reads lazily during generation
+            if active.backend_name == "pocket-tts":
+                os.unlink(temp_file.name)
+            else:
+                temp_files_to_cleanup.append(temp_file.name)
         elif config.voice_source in PREDEFINED_VOICES:
-            voice_states[config.name] = tts_model._cached_get_state_for_audio_prompt(
-                config.voice_source, truncate=True, target_db=config.rms_target_db
+            voice_states[config.name] = active.cached_get_voice_state(
+                config.voice_source, target_db=config.rms_target_db
             )
         elif (
             config.voice_source.startswith("http://")
             or config.voice_source.startswith("https://")
             or config.voice_source.startswith("hf://")
         ):
-            voice_states[config.name] = tts_model._cached_get_state_for_audio_prompt(
-                config.voice_source, truncate=True, target_db=config.rms_target_db
+            voice_states[config.name] = active.cached_get_voice_state(
+                config.voice_source, target_db=config.rms_target_db
             )
         else:
             raise HTTPException(
@@ -450,7 +600,7 @@ def multi_talk_to_speech(
             )
 
     # Generate audio progressively and stream with crossfade
-    sample_rate = tts_model.config.mimi.sample_rate
+    sample_rate = active.sample_rate
     crossfade_samples = int(crossfade_ms * sample_rate / 1000)
 
     # Set up cancellation for client disconnect detection
@@ -477,62 +627,88 @@ def multi_talk_to_speech(
 
     def generate_progressive_wav():
         """Generator that yields WAV data progressively as segments are generated."""
-        # Write WAV header first (with placeholder length)
-        header_buffer = io.BytesIO()
-        wav_header = wave.open(header_buffer, "wb")
-        wav_header.setnchannels(1)  # Mono
-        wav_header.setsampwidth(2)  # 16-bit
-        wav_header.setframerate(sample_rate)
-        wav_header.setnframes(1_000_000_000)  # Placeholder for streaming
-        wav_header.close()
-        header_buffer.seek(0)
-        yield header_buffer.read()
+        try:
+            # Write WAV header first (with placeholder length)
+            header_buffer = io.BytesIO()
+            wav_header = wave.open(header_buffer, "wb")
+            wav_header.setnchannels(1)  # Mono
+            wav_header.setsampwidth(2)  # 16-bit
+            wav_header.setframerate(sample_rate)
+            wav_header.setnframes(1_000_000_000)  # Placeholder for streaming
+            wav_header.close()
+            header_buffer.seek(0)
+            yield header_buffer.read()
 
-        # Track the "tail" from previous segment for crossfading
-        prev_tail = None
+            # Track the "tail" from previous segment for crossfading
+            prev_tail = None
 
-        for i, segment in enumerate(segments):
-            if cancel_event.is_set():
-                logging.info("Multi-TTS generation cancelled at segment %d", i)
-                break
-            state = voice_states[segment.speaker_name]
-            audio = tts_model.generate_audio(model_state=state, text_to_generate=segment.text)
-            audio_np = audio.squeeze().numpy()
+            for i, segment in enumerate(segments):
+                if cancel_event.is_set():
+                    logging.info("Multi-TTS generation cancelled at segment %d", i)
+                    break
 
-            is_last = i == len(segments) - 1
+                state = voice_states[segment.speaker_name]
 
-            if prev_tail is not None and len(prev_tail) > 0 and len(audio_np) >= crossfade_samples:
-                # Apply crossfade with previous segment's tail
-                fade_out = np.linspace(1.0, 0.0, crossfade_samples)
-                fade_in = np.linspace(0.0, 1.0, crossfade_samples)
-                crossfaded = np.clip(
-                    prev_tail * fade_out + audio_np[:crossfade_samples] * fade_in, -1.0, 1.0
-                )
-                # Convert and yield the crossfaded portion
-                crossfaded_int16 = (crossfaded * 32767).astype(np.int16)
-                yield crossfaded_int16.tobytes()
-                # Continue with the rest of this segment (minus crossfade start)
-                audio_np = audio_np[crossfade_samples:]
+                # Collect all chunks from the stream into a single numpy array
+                chunks = []
+                for chunk in active.generate_audio_stream(
+                    voice_state=state,
+                    text=segment.text,
+                    cancel_event=cancel_event,
+                    temperature=fish_temperature,
+                    top_p=fish_top_p,
+                    top_k=fish_top_k,
+                ):
+                    chunks.append(chunk.squeeze().numpy())
+                if not chunks:
+                    continue
+                audio_np = np.concatenate(chunks)
 
-            if is_last:
-                # Last segment: yield everything
-                if len(audio_np) > 0:
-                    audio_int16 = (audio_np * 32767).astype(np.int16)
-                    yield audio_int16.tobytes()
-                prev_tail = None
-            else:
-                # Not last: hold back the tail for crossfading with next segment
-                if len(audio_np) > crossfade_samples:
-                    # Yield everything except the tail
-                    main_part = audio_np[:-crossfade_samples]
-                    audio_int16 = (main_part * 32767).astype(np.int16)
-                    yield audio_int16.tobytes()
-                    prev_tail = audio_np[-crossfade_samples:]
+                is_last = i == len(segments) - 1
+
+                if (
+                    prev_tail is not None
+                    and len(prev_tail) > 0
+                    and len(audio_np) >= crossfade_samples
+                ):
+                    # Apply crossfade with previous segment's tail
+                    fade_out = np.linspace(1.0, 0.0, crossfade_samples)
+                    fade_in = np.linspace(0.0, 1.0, crossfade_samples)
+                    crossfaded = np.clip(
+                        prev_tail * fade_out + audio_np[:crossfade_samples] * fade_in, -1.0, 1.0
+                    )
+                    # Convert and yield the crossfaded portion
+                    crossfaded_int16 = (crossfaded * 32767).astype(np.int16)
+                    yield crossfaded_int16.tobytes()
+                    # Continue with the rest of this segment (minus crossfade start)
+                    audio_np = audio_np[crossfade_samples:]
+
+                if is_last:
+                    # Last segment: yield everything
+                    if len(audio_np) > 0:
+                        audio_int16 = (audio_np * 32767).astype(np.int16)
+                        yield audio_int16.tobytes()
+                    prev_tail = None
                 else:
-                    # Segment too short, just hold it all for crossfade
-                    prev_tail = audio_np
+                    # Not last: hold back the tail for crossfading with next segment
+                    if len(audio_np) > crossfade_samples:
+                        # Yield everything except the tail
+                        main_part = audio_np[:-crossfade_samples]
+                        audio_int16 = (main_part * 32767).astype(np.int16)
+                        yield audio_int16.tobytes()
+                        prev_tail = audio_np[-crossfade_samples:]
+                    else:
+                        # Segment too short, just hold it all for crossfade
+                        prev_tail = audio_np
 
-        cancel_event.set()  # Ensure watchdog stops
+            cancel_event.set()  # Ensure watchdog stops
+        finally:
+            # Clean up temp files that fish-speech needed alive during generation
+            for tmp_path in temp_files_to_cleanup:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
 
     return StreamingResponse(
         generate_progressive_wav(),
@@ -555,15 +731,22 @@ def serve(
     eos_threshold: Annotated[
         float, typer.Option(help="EOS threshold (more negative = harder to trigger EOS)")
     ] = DEFAULT_EOS_THRESHOLD,
+    model: Annotated[
+        str, typer.Option(help="TTS backend to use (pocket-tts or fish-speech)")
+    ] = DEFAULT_BACKEND,
 ):
     """Start the FastAPI server."""
 
-    global tts_model, global_model_state
-    tts_model = TTSModel.load_model(DEFAULT_VARIANT, eos_threshold=eos_threshold)
+    available = get_available_backends()
+    if model not in available:
+        logger.error("Backend %r not available. Available: %s", model, available)
+        raise typer.Exit(code=1)
 
-    # Pre-load the voice prompt
-    global_model_state = tts_model.get_state_for_audio_prompt(voice)
-    logger.info(f"The size of the model state is {size_of_dict(global_model_state) // 1e6} MB")
+    load_kwargs: dict[str, Any] = {}
+    if model == "pocket-tts":
+        load_kwargs["voice"] = voice
+        load_kwargs["eos_threshold"] = eos_threshold
+    backend_manager.activate(model, **load_kwargs)
 
     uvicorn.run("pocket_tts.main:web_app", host=host, port=port, reload=reload)
 

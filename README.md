@@ -17,6 +17,7 @@ A macOS-native fork of [Kyutai's Pocket TTS](https://github.com/kyutai-labs/pock
 | **LaunchAgent** | Auto-starts the TTS server on login (port 8765) |
 | **Text Normalizer** | Numbers, currencies, abbreviations, acronyms, ISR/radar terms → speakable words |
 | **Pause/Resume/Stop** | Client-side audio controls + server-side cancellation |
+| **Fish Audio S2 Pro** | Alternate 5B-parameter TTS backend via MLX — selectable from Electron, Menu Bar, and Quick Action |
 
 ## Screenshots
 
@@ -46,6 +47,9 @@ https://github.com/user-attachments/assets/20c9442f-549c-4d97-aa9b-f0b8b75218fb
 git clone https://github.com/slaughters85j/pocket-tts.git
 cd pocket-tts
 uv pip install -e .
+
+# 1b. Optional: enable Fish Audio S2 Pro backend (Apple Silicon only)
+uv sync --group mlx
 
 # 2. Run the Electron app in dev mode
 cd electron && npm install && npm run dev
@@ -141,6 +145,81 @@ No external scripts or manual venv management required — it just works.
   <img src="Assets/enhance-tuning.jpeg" alt="Enhancement Studio — tuning controls" width="625" /><br/>
   <img src="Assets/enhanced-voice-preview.jpeg" alt="A/B preview of enhanced voice" width="625" />
 </p>
+
+## Fish Audio S2 Pro Backend
+
+An alternate TTS backend using [Fish Audio S2 Pro](https://huggingface.co/mlx-community/fish-audio-s2-pro-8bit) (5B params, MLX 8-bit quantized). Requires Apple Silicon.
+
+### Setup
+
+```bash
+# 1. Install MLX dependencies
+uv sync --group mlx
+
+# 2. Download the model (~6.7 GB)
+huggingface-cli download mlx-community/fish-audio-s2-pro-8bit \
+  --local-dir models/fish-audio-s2-pro-8bit
+```
+
+The entire `models/fish-audio-s2-pro-8bit/` directory is gitignored — all files come from HuggingFace so updates are always in sync. The rebuild script (`scripts/rebuild-all.sh`) installs MLX dependencies automatically on Apple Silicon.
+
+> **Note:** The model is gated under the [Fish Audio Research License](https://huggingface.co/fishaudio/s2-pro/blob/main/LICENSE). If prompted, accept the license at the HuggingFace page and authenticate with `huggingface-cli login` first.
+
+### Usage
+
+Once installed, a **Model** dropdown appears in the Electron app (and a **Select Model** submenu in the Menu Bar app). Switch between:
+
+- **Pocket TTS (100M, CPU)** — fast, lightweight, built-in voices
+- **Fish Audio S2 Pro (5B, MLX)** — higher quality, 80+ languages, inline `[tag]` emotion/prosody control
+
+Only one model is loaded at a time. Switching unloads the current model and loads the new one (~10-15s for fish-speech).
+
+### Inline Tags
+
+Fish Audio S2 Pro supports 15,000+ inline tags for fine-grained control:
+
+## Fine-Grained Inline Control
+
+S2 Pro enables localized control over speech generation by embedding natural-language instructions directly within the text using `[tag]` syntax. Rather than relying on a fixed set of predefined tags, S2 Pro accepts free-form textual descriptions — such as `[whisper in small voice]`, `[professional broadcast tone]`, or `[pitch up]` — allowing open-ended expression control at the word level.
+
+```
+[whisper in small voice]
+[professional broadcast tone]
+[pitch up]
+```
+
+**Common Tags (15,000+ unique tags supported):**
+
+`[pause]` `[emphasis]` `[laughing]` `[inhale]` `[chuckle]` `[tsk]` `[singing]` `[excited]` `[laughing tone]` `[interrupting]` `[chuckling]` `[excited tone]` `[volume up]` `[echo]` `[angry]` `[low volume]` `[sigh]` `[low voice]` `[whisper]` `[screaming]` `[shouting]` `[loud]` `[surprised]` `[short pause]` `[exhale]` `[delight]` `[panting]` `[audience laughter]` `[with strong accent]` `[volume down]` `[clearing throat]` `[sad]` `[moaning]` `[shocked]`
+
+### Inline Tag Best Practices
+
+Based on local MLX inference testing, the following guidelines produce the most reliable output:
+
+- **One tag per phrase or sentence.** Give the model enough text after a tag to settle into the style before switching. Rapid tag switching every sentence degrades quality.
+- **Do not stack tags back-to-back.** Adjacent tags with no text between them (e.g., `[audience laughter][chuckling]`) produce garbled or distorted audio. Separate them with natural text or a full sentence.
+- **`[pause]` counts as a tag.** Do not place `[pause]` immediately before another tag — insert text between them.
+- **`[singing]` is unreliable.** The model is a TTS system, not a vocoder trained on melodic data. Expect spoken cadence, not actual singing.
+- **`[screaming]` causes distortion.** Audio phases out and distorts even with adequate text after the tag. Use `[loud]` or `[troubled]` as safer alternatives for high-intensity delivery.
+- **Emotion transitions need runway.** When shifting between emotions, allow at least one full sentence per tag so the Dual-AR architecture can stabilize the new prosody.
+
+**Good:**
+```
+[excited]I cannot believe this works! After all that effort, we finally have local inference.
+[whisper]And the best part is, nobody else knows about it yet.
+```
+
+**Bad:**
+```
+[excited]Wow! [sad]But also sad. [angry]And frustrating! [laughing]Just kidding.
+[pause][short pause][excited]Surprise![audience laughter][chuckling]Funny right?
+```
+
+### Limitations
+
+- Voice cloning uses custom WAV files only — predefined pocket-tts voices (Alba, etc.) are not available with this backend.
+- Multi-Talk mode is pocket-tts only.
+- Model weights (~6.7 GB) download from HuggingFace on first use.
 
 ## macOS Quick Action
 
