@@ -1,4 +1,4 @@
-import { spawn, ChildProcess } from 'child_process';
+import { spawn, ChildProcess, execFileSync } from 'child_process';
 import { app } from 'electron';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -7,6 +7,7 @@ import * as net from 'net';
 export class PythonServer {
   private process: ChildProcess | null = null;
   public port: number = 0;
+  private useUvSpawn: boolean = false; // true = uv run (fish-speech in prod)
 
   private get isDev(): boolean {
     return !app.isPackaged;
@@ -15,10 +16,23 @@ export class PythonServer {
   async start(): Promise<void> {
     this.port = await this.findAvailablePort();
 
-    const command = this.getCommand();
-    const args = this.getArgs();
+    const model = this.getConfiguredBackend();
 
+    // In production, fish-speech requires uv run (mlx-audio not in PyInstaller bundle).
+    // Pocket-tts uses the bundled binary as before.
+    this.useUvSpawn = !this.isDev && model === 'fish-speech' && this.isUvAvailable();
+
+    if (!this.isDev && model === 'fish-speech' && !this.useUvSpawn) {
+      console.warn(
+        'fish-speech selected but uv not found — falling back to pocket-tts (bundled). ' +
+        'Install uv (https://docs.astral.sh/uv/) for Fish Audio support in the built app.'
+      );
+    }
+
+    const command = this.getCommand(model);
+    const args = this.getArgs(model);
     const cwd = this.getWorkingDirectory();
+
     console.log(`Starting Python server: ${command} ${args.join(' ')} in ${cwd}`);
 
     this.process = spawn(command, args, {
@@ -53,11 +67,11 @@ export class PythonServer {
     }
   }
 
-  private getCommand(): string {
-    if (this.isDev) {
+  private getCommand(model: string): string {
+    if (this.isDev || this.useUvSpawn) {
       return 'uv';
     }
-    // Production: use bundled Python
+    // Production pocket-tts: use bundled Python
     const resourcePath = process.resourcesPath;
     if (process.platform === 'win32') {
       return path.join(resourcePath, 'pocket-tts-server', 'pocket-tts-server.exe');
@@ -65,13 +79,25 @@ export class PythonServer {
     return path.join(resourcePath, 'pocket-tts-server', 'pocket-tts-server');
   }
 
-  private getArgs(): string[] {
-    const model = this.getConfiguredBackend();
-    if (this.isDev) {
+  private getArgs(model: string): string[] {
+    if (this.isDev || this.useUvSpawn) {
       return ['run', 'pocket-tts', 'serve', '--port', this.port.toString(), '--model', model];
     }
-    // Note: entry script already adds "serve" command, so just pass options
-    return ['--port', this.port.toString(), '--model', model];
+    // Production pocket-tts bundle — fallback to pocket-tts if fish-speech was requested but uv missing
+    const safeModel = this.useUvSpawn ? model : 'pocket-tts';
+    return ['--port', this.port.toString(), '--model', safeModel];
+  }
+
+  /**
+   * Check if uv is available on PATH (needed for fish-speech in production builds).
+   */
+  private isUvAvailable(): boolean {
+    try {
+      execFileSync('uv', ['--version'], { stdio: 'ignore', timeout: 5000 });
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   /**
@@ -105,7 +131,45 @@ export class PythonServer {
       // In dev mode, run from the pocket-tts root directory (parent of electron/)
       return path.resolve(__dirname, '..', '..', '..');
     }
-    // In production, run from the app resources directory
+    if (this.useUvSpawn) {
+      // fish-speech in production: uv needs the project root (where pyproject.toml lives).
+      // The project root is stored in config or inferred from the app bundle location.
+      return this.getProjectRoot();
+    }
+    // Production pocket-tts: run from the app resources directory
+    return process.resourcesPath;
+  }
+
+  /**
+   * Locate the pocket-tts project root for uv-based spawning in production.
+   * Checks common locations in order of preference.
+   */
+  private getProjectRoot(): string {
+    // 1. POCKET_TTS_PROJECT_ROOT env var (explicit override)
+    const envRoot = process.env.POCKET_TTS_PROJECT_ROOT;
+    if (envRoot && fs.existsSync(path.join(envRoot, 'pyproject.toml'))) {
+      return envRoot;
+    }
+
+    // 2. Adjacent to the .app bundle (e.g. user cloned repo, built locally)
+    //    /Users/x/dev/pocket-tts/electron/release/mac-arm64/Pocket TTS.app
+    //    → project root is 4 levels up from the .app's MacOS dir
+    const appPath = app.getAppPath();
+    const candidates = [
+      path.resolve(appPath, '..', '..', '..', '..', '..'),  // from asar inside .app
+      path.resolve(appPath, '..', '..', '..'),
+      path.resolve(app.getPath('home'), 'dev_local', 'pocket-tts'),
+    ];
+
+    for (const candidate of candidates) {
+      if (fs.existsSync(path.join(candidate, 'pyproject.toml'))) {
+        console.log(`Found project root at: ${candidate}`);
+        return candidate;
+      }
+    }
+
+    // Last resort: fall back to resourcesPath
+    console.warn('Could not find pocket-tts project root for uv spawn, using resourcesPath');
     return process.resourcesPath;
   }
 
