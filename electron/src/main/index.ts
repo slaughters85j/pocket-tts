@@ -152,6 +152,16 @@ ipcMain.handle('get-server-port', () => {
   return pythonServer?.port ?? 8000;
 });
 
+ipcMain.handle('start-dictation', () => {
+  // Trigger macOS dictation via AppleScript
+  const { execFile } = require('child_process');
+  execFile('osascript', ['-e',
+    'tell application "System Events" to tell (first process whose frontmost is true) to tell menu bar 1 to tell menu "Edit" to click menu item "Start Dictation…"'
+  ], (err: any) => {
+    if (err) console.log('[ChatLLM] Dictation trigger failed:', err.message);
+  });
+});
+
 ipcMain.handle('toggle-devtools', () => {
   if (mainWindow) {
     if (mainWindow.webContents.isDevToolsOpened()) {

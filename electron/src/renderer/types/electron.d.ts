@@ -104,6 +104,7 @@ export interface ElectronAPI {
   onChatComplete: (callback: () => void) => void;
   onChatError: (callback: (error: string) => void) => void;
   removeChatListeners: () => void;
+  startDictation?: () => Promise<void>;
 }
 
 declare global {
