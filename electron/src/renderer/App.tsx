@@ -9,13 +9,14 @@ import { SaveVoiceModal } from './components/SaveVoiceModal';
 import { EnhancementStudio } from './components/EnhancementStudio';
 import { MultiTalk, MultiTalkConfig } from './components/MultiTalk';
 import { History, HistoryEntry, addToHistory } from './components/History';
+import { ChatLLM } from './components/ChatLLM';
 import { BackendSelector, BackendInfo, FishGenParams } from './components/BackendSelector';
 import { StreamingWavPlayer } from './lib/streaming-wav-player';
 import './types/electron.d.ts';
 
 export type GenerationStatus = 'idle' | 'generating' | 'streaming' | 'complete' | 'error' | 'cancelled';
 
-type TabType = 'single' | 'multi' | 'history';
+type TabType = 'single' | 'multi' | 'history' | 'chat-llm';
 
 interface GenerationState {
   status: GenerationStatus;
@@ -364,25 +365,24 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-bg-primary">
-      {/* Drag region for macOS with dev tools toggle */}
-      <div className="h-8 drag-region relative">
+      {/* Title bar / drag region — safe area for window dragging */}
+      <div className="drag-region pt-3 pb-4 relative">
         <button
           onClick={() => window.electronAPI?.toggleDevTools()}
-          className="absolute right-2 top-1 no-drag text-text-secondary/40 hover:text-text-secondary text-xs px-1.5 py-0.5 rounded transition-colors"
+          className="absolute right-3 top-2 no-drag text-text-secondary/40 hover:text-text-secondary text-xs px-1.5 py-0.5 rounded transition-colors"
           title="Toggle Developer Tools"
         >
           DEV
         </button>
-      </div>
-
-      <div className="max-w-6xl mx-auto px-6 pb-8">
-        {/* Header */}
-        <div className="text-center mb-6">
+        <div className="text-center pt-2">
           <h1 className="text-2xl font-bold text-text-primary">Pocket TTS</h1>
           <p className="text-sm text-text-secondary mt-1">
             High-quality text-to-speech that runs on your CPU
           </p>
         </div>
+      </div>
+
+      <div className="max-w-6xl mx-auto px-6 pb-8">
 
 
 
@@ -417,6 +417,16 @@ export default function App() {
               }`}
           >
             History
+          </button>
+          <button
+            onClick={() => setActiveTab('chat-llm')}
+            className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors
+              ${activeTab === 'chat-llm'
+                ? 'border-accent text-accent'
+                : 'border-transparent text-text-secondary hover:text-text-primary'
+              }`}
+          >
+            Chat LLM
           </button>
         </div>
 
@@ -547,6 +557,14 @@ export default function App() {
               onReuseMulti={handleReuseMulti}
             />
           </div>
+        )}
+
+        {/* Chat LLM Tab */}
+        {activeTab === 'chat-llm' && (
+          <ChatLLM
+            savedVoices={savedVoices}
+            onDeleteSavedVoice={handleDeleteSavedVoice}
+          />
         )}
       </div>
 
