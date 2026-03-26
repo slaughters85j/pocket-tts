@@ -90,6 +90,20 @@ export interface ElectronAPI {
   // Backend management
   getBackends: () => Promise<{ available: string[]; active: string | null; supports_tags: boolean }>;
   switchBackend: (name: string) => Promise<{ status: string; backend?: string; message?: string }>;
+  // Chat LLM
+  chatSendMessage: (params: {
+    messages: { role: string; content: string }[];
+    voiceUrl?: string;
+    savedVoiceId?: string;
+  }) => Promise<void>;
+  chatCancel: () => Promise<void>;
+  chatCheckConnection: () => Promise<{ connected: boolean; model?: string }>;
+  onChatLLMChunk: (callback: (text: string) => void) => void;
+  onChatTTSChunk: (callback: (chunk: ArrayBuffer) => void) => void;
+  onChatTTSSentenceComplete: (callback: () => void) => void;
+  onChatComplete: (callback: () => void) => void;
+  onChatError: (callback: (error: string) => void) => void;
+  removeChatListeners: () => void;
 }
 
 declare global {

@@ -3,6 +3,7 @@ import * as path from 'path';
 import { PythonServer } from './python-server';
 import { registerIpcHandlers, registerEnhancementHandlers, cleanupEnhancer } from './ipc-handlers';
 import { registerVoiceHandlers, getVoiceManager } from './voice-manager';
+import { registerChatHandlers } from './llm-handler';
 
 let mainWindow: BrowserWindow | null = null;
 let pythonServer: PythonServer | null = null;
@@ -112,6 +113,7 @@ app.whenReady().then(async () => {
   const vm = getVoiceManager();
   registerIpcHandlers(() => pythonServer, vm);
   registerEnhancementHandlers(vm);
+  registerChatHandlers(() => pythonServer, vm);
 
   try {
     await startPythonServer();
