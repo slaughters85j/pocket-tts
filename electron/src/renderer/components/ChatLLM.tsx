@@ -170,6 +170,22 @@ export function ChatLLM({ savedVoices, onDeleteSavedVoice }: ChatLLMProps) {
     setSelectedVoice(voice);
   }, []);
 
+  const handleExportChat = useCallback(() => {
+    if (messages.length === 0) return;
+
+    const content = messages
+      .map((msg) => `(${msg.role})\n${msg.content}`)
+      .join('\n\n---\n\n');
+
+    const blob = new Blob([content], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `chat-export-${new Date().toISOString().slice(0, 10)}.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [messages]);
+
   // Connection status dot
   const statusDot = {
     checking: 'bg-yellow-400 animate-pulse',
@@ -184,7 +200,7 @@ export function ChatLLM({ savedVoices, onDeleteSavedVoice }: ChatLLMProps) {
   }[connectionStatus];
 
   return (
-    <div className="flex flex-col" style={{ minHeight: 'calc(100vh - 180px)' }}>
+    <div className="flex flex-col" style={{ height: 'calc(100vh - 180px)' }}>
       {/* Two-Column Layout */}
       <div className="flex gap-6 flex-1 min-h-0">
         {/* Left Column: Connection + Voice */}
@@ -219,20 +235,31 @@ export function ChatLLM({ savedVoices, onDeleteSavedVoice }: ChatLLMProps) {
             hidePredefinedVoices={false}
           />
 
-          {/* Clear Chat */}
-          <button
-            onClick={() => {
-              setMessages([]);
-              setCurrentAssistantText('');
-              setError(null);
-            }}
-            disabled={isStreaming || messages.length === 0}
-            className={`w-full px-4 py-2 text-sm border border-border-color rounded-lg text-text-secondary
-              hover:bg-bg-secondary transition-colors
-              ${isStreaming || messages.length === 0 ? 'opacity-50 cursor-not-allowed' : ''}`}
-          >
-            Clear Chat
-          </button>
+          {/* Clear Chat / Export Chat */}
+          <div className="flex gap-2">
+            <button
+              onClick={() => {
+                setMessages([]);
+                setCurrentAssistantText('');
+                setError(null);
+              }}
+              disabled={isStreaming || messages.length === 0}
+              className={`flex-1 px-4 py-2 text-sm border border-border-color rounded-lg text-text-secondary
+                hover:bg-bg-secondary transition-colors
+                ${isStreaming || messages.length === 0 ? 'opacity-50 cursor-not-allowed' : ''}`}
+            >
+              Clear Chat
+            </button>
+            <button
+              onClick={handleExportChat}
+              disabled={messages.length === 0}
+              className={`flex-1 px-4 py-2 text-sm border border-border-color rounded-lg text-text-secondary
+                hover:bg-bg-secondary transition-colors
+                ${messages.length === 0 ? 'opacity-50 cursor-not-allowed' : ''}`}
+            >
+              Export Chat
+            </button>
+          </div>
         </div>
 
         {/* Right Column: Chat Area */}
