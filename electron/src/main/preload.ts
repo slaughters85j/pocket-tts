@@ -92,6 +92,21 @@ export interface ElectronAPI {
   // Backend management
   getBackends: () => Promise<{ available: string[]; active: string | null; supports_tags: boolean }>;
   switchBackend: (name: string) => Promise<{ status: string; backend?: string; message?: string }>;
+  // Chat LLM
+  chatSendMessage: (params: {
+    messages: { role: string; content: string }[];
+    voiceUrl?: string;
+    savedVoiceId?: string;
+  }) => Promise<void>;
+  chatCancel: () => Promise<void>;
+  chatCheckConnection: () => Promise<{ connected: boolean; model?: string }>;
+  onChatLLMChunk: (callback: (text: string) => void) => void;
+  onChatTTSChunk: (callback: (chunk: ArrayBuffer) => void) => void;
+  onChatTTSSentenceComplete: (callback: () => void) => void;
+  onChatComplete: (callback: () => void) => void;
+  onChatError: (callback: (error: string) => void) => void;
+  removeChatListeners: () => void;
+  startDictation?: () => Promise<void>;
 }
 
 contextBridge.exposeInMainWorld('electronAPI', {
@@ -158,4 +173,35 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Backend management
   getBackends: () => ipcRenderer.invoke('backend:list'),
   switchBackend: (name: string) => ipcRenderer.invoke('backend:switch', name),
+  // Chat LLM
+  chatSendMessage: (params: {
+    messages: { role: string; content: string }[];
+    voiceUrl?: string;
+    savedVoiceId?: string;
+  }) => ipcRenderer.invoke('chat:send-message', params),
+  chatCancel: () => ipcRenderer.invoke('chat:cancel'),
+  chatCheckConnection: () => ipcRenderer.invoke('chat:check-connection'),
+  onChatLLMChunk: (callback: (text: string) => void) => {
+    ipcRenderer.on('chat:llm-chunk', (_event, text) => callback(text));
+  },
+  onChatTTSChunk: (callback: (chunk: ArrayBuffer) => void) => {
+    ipcRenderer.on('chat:tts-chunk', (_event, chunk) => callback(chunk));
+  },
+  onChatTTSSentenceComplete: (callback: () => void) => {
+    ipcRenderer.on('chat:tts-sentence-complete', () => callback());
+  },
+  onChatComplete: (callback: () => void) => {
+    ipcRenderer.on('chat:complete', () => callback());
+  },
+  onChatError: (callback: (error: string) => void) => {
+    ipcRenderer.on('chat:error', (_event, error) => callback(error));
+  },
+  startDictation: () => ipcRenderer.invoke('start-dictation'),
+  removeChatListeners: () => {
+    ipcRenderer.removeAllListeners('chat:llm-chunk');
+    ipcRenderer.removeAllListeners('chat:tts-chunk');
+    ipcRenderer.removeAllListeners('chat:tts-sentence-complete');
+    ipcRenderer.removeAllListeners('chat:complete');
+    ipcRenderer.removeAllListeners('chat:error');
+  },
 } as ElectronAPI);
