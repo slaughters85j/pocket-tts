@@ -4,6 +4,7 @@ type AudioFormat = 'wav' | 'mp3' | 'm4a';
 
 interface AudioPlayerProps {
   audioBlob: Blob;
+  scriptText?: string;
 }
 
 const FORMAT_OPTIONS: { format: AudioFormat; label: string; ext: string }[] = [
@@ -12,7 +13,7 @@ const FORMAT_OPTIONS: { format: AudioFormat; label: string; ext: string }[] = [
   { format: 'm4a', label: 'M4A', ext: '.m4a' },
 ];
 
-export function AudioPlayer({ audioBlob }: AudioPlayerProps) {
+export function AudioPlayer({ audioBlob, scriptText }: AudioPlayerProps) {
   const audioRef = useRef<HTMLAudioElement>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -161,31 +162,34 @@ export function AudioPlayer({ audioBlob }: AudioPlayerProps) {
     try {
       // Lazy-load the encoder module (lamejs is heavy and may fail at import time in some envs)
       const encoder = await import('../lib/audio-encoder');
-      const filename = `pocket-tts-output`;
 
+      let outputBlob: Blob;
       switch (format) {
-        case 'wav': {
-          const outputBlob = await encoder.toStereoWav(audioBlob);
-          downloadBlob(outputBlob, `${filename}.wav`);
+        case 'wav':
+          outputBlob = await encoder.toStereoWav(audioBlob);
           break;
-        }
-        case 'mp3': {
-          const outputBlob = await encoder.encodeToMp3(audioBlob);
-          downloadBlob(outputBlob, `${filename}.mp3`);
+        case 'mp3':
+          outputBlob = await encoder.encodeToMp3(audioBlob);
           break;
-        }
-        case 'm4a': {
-          const outputBlob = await encoder.encodeToM4a(audioBlob);
-          downloadBlob(outputBlob, `${filename}.m4a`);
+        case 'm4a':
+          outputBlob = await encoder.encodeToM4a(audioBlob);
           break;
-        }
+      }
+
+      // Route through main process: native save dialog writes audio + companion .txt
+      if (window.electronAPI?.exportAudio) {
+        const audioBuffer = await outputBlob.arrayBuffer();
+        await window.electronAPI.exportAudio({ audioBuffer, scriptText, format });
+      } else {
+        // Fallback for non-Electron (e.g. plain browser dev)
+        downloadBlob(outputBlob, `pocket-tts-output.${format}`);
       }
     } catch (error) {
       console.error(`[AudioPlayer] Failed to encode ${format}:`, error);
     } finally {
       setEncoding(null);
     }
-  }, [audioBlob, downloadBlob]);
+  }, [audioBlob, scriptText, downloadBlob]);
 
   const formatTime = (time: number) => {
     if (!isFinite(time)) return '0:00';

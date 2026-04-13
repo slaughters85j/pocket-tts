@@ -1,4 +1,4 @@
-import { ipcMain, IpcMainInvokeEvent } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, IpcMainInvokeEvent } from 'electron';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -356,6 +356,46 @@ export function registerIpcHandlers(
       });
     });
   });
+
+  // Export audio + companion script .txt via native save dialog
+  ipcMain.handle(
+    'audio:export',
+    async (
+      _event: IpcMainInvokeEvent,
+      params: { audioBuffer: ArrayBuffer; scriptText?: string; format: string }
+    ): Promise<string | null> => {
+      const { audioBuffer, scriptText, format } = params;
+
+      const filterMap: Record<string, Electron.FileFilter> = {
+        wav: { name: 'WAV Audio', extensions: ['wav'] },
+        mp3: { name: 'MP3 Audio', extensions: ['mp3'] },
+        m4a: { name: 'M4A Audio', extensions: ['m4a'] },
+      };
+
+      const parentWindow = BrowserWindow.getFocusedWindow() ?? undefined;
+      const result = await dialog.showSaveDialog(
+        ...(parentWindow ? [parentWindow] : []),
+        {
+          defaultPath: path.join(app.getPath('downloads'), `pocket-tts-output.${format}`),
+          filters: [filterMap[format] ?? { name: 'Audio', extensions: [format] }],
+        }
+      );
+
+      if (result.canceled || !result.filePath) return null;
+
+      const audioPath = result.filePath;
+      fs.writeFileSync(audioPath, Buffer.from(audioBuffer));
+
+      // Write companion script .txt with the same name/location
+      if (scriptText) {
+        const parsed = path.parse(audioPath);
+        const txtPath = path.join(parsed.dir, `${parsed.name}.txt`);
+        fs.writeFileSync(txtPath, scriptText, 'utf-8');
+      }
+
+      return audioPath;
+    }
+  );
 
   // ------------------------------------------------------------------
   // Backend management

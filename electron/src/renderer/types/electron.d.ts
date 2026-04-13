@@ -105,6 +105,8 @@ export interface ElectronAPI {
   onChatError: (callback: (error: string) => void) => void;
   removeChatListeners: () => void;
   startDictation?: () => Promise<void>;
+  // Audio export with companion script file
+  exportAudio: (params: { audioBuffer: ArrayBuffer; scriptText?: string; format: string }) => Promise<string | null>;
 }
 
 declare global {

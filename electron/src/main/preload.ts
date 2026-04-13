@@ -107,6 +107,8 @@ export interface ElectronAPI {
   onChatError: (callback: (error: string) => void) => void;
   removeChatListeners: () => void;
   startDictation?: () => Promise<void>;
+  // Audio export with companion script file
+  exportAudio: (params: { audioBuffer: ArrayBuffer; scriptText?: string; format: string }) => Promise<string | null>;
 }
 
 contextBridge.exposeInMainWorld('electronAPI', {
@@ -197,6 +199,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('chat:error', (_event, error) => callback(error));
   },
   startDictation: () => ipcRenderer.invoke('start-dictation'),
+  // Audio export with companion script file
+  exportAudio: (params: { audioBuffer: ArrayBuffer; scriptText?: string; format: string }) =>
+    ipcRenderer.invoke('audio:export', params),
   removeChatListeners: () => {
     ipcRenderer.removeAllListeners('chat:llm-chunk');
     ipcRenderer.removeAllListeners('chat:tts-chunk');

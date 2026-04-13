@@ -492,7 +492,7 @@ export default function App() {
                 {/* Audio Player */}
                 {audioBlob && (
                   <div>
-                    <AudioPlayer audioBlob={audioBlob} />
+                    <AudioPlayer audioBlob={audioBlob} scriptText={text} />
                   </div>
                 )}
               </div>

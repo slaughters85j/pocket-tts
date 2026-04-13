@@ -616,7 +616,7 @@ export function MultiTalk({ pendingConfig, onConfigLoaded, onBackendChange, back
           {/* Audio Player */}
           {audioBlob && (
             <div>
-              <AudioPlayer audioBlob={audioBlob} />
+              <AudioPlayer audioBlob={audioBlob} scriptText={script} />
             </div>
           )}
         </div>
