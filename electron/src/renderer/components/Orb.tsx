@@ -135,24 +135,43 @@ export function Orb({ playerRef, isActive }: OrbProps) {
         `#include <common>
 ${SIMPLEX_3D}
 uniform float u_time;
-uniform float u_amp;`,
+uniform float u_amp;
+varying vec3 vRibbonWorldPos;`,
       ).replace(
         '#include <begin_vertex>',
         `#include <begin_vertex>
 float n_a = snoise(position * 1.2 + vec3(u_time * 0.30));
 float n_b = snoise(position * 2.5 - vec3(u_time * 0.21)) * 0.5;
-transformed += normal * (n_a + n_b) * (0.04 + u_amp * 0.06);`,
+transformed += normal * (n_a + n_b) * (0.04 + u_amp * 0.06);
+vRibbonWorldPos = (modelMatrix * vec4(transformed, 1.0)).xyz;`,
       );
-      // Fresnel-driven warm metal accents on ribbon edges. Glancing angles get
-      // gold, deeper view directions get rust. Subtle HDR so they bloom faintly.
+      // Time-varying Fresnel accents. Three colors (electric blue, gold, rust)
+      // cycle on 120-degree-offset sinusoids. Phase is driven by world position
+      // so each ribbon and each section transitions independently and never in
+      // sync, producing a natural non-uniform shimmer along the edges.
       shader.fragmentShader = shader.fragmentShader.replace(
+        '#include <common>',
+        `#include <common>
+uniform float u_time;
+varying vec3 vRibbonWorldPos;`,
+      ).replace(
         '#include <emissivemap_fragment>',
         `#include <emissivemap_fragment>
 vec3 vDir = normalize(vViewPosition);
 float fres = pow(1.0 - max(dot(normalize(vNormal), vDir), 0.0), 2.2);
-vec3 goldEdge = vec3(1.30, 0.78, 0.22);
-vec3 rustEdge = vec3(0.55, 0.18, 0.05);
-totalEmissiveRadiance += mix(rustEdge, goldEdge, fres) * fres * 0.65;`,
+
+float phase = u_time * 0.18 + vRibbonWorldPos.x * 1.30 + vRibbonWorldPos.y * 0.85;
+vec3 blueEdge = vec3(0.20, 0.80, 1.50);
+vec3 goldEdge = vec3(1.10, 0.65, 0.18);
+vec3 rustEdge = vec3(0.45, 0.15, 0.05);
+
+float w1 = sin(phase) * 0.5 + 0.5;
+float w2 = sin(phase + 2.094) * 0.5 + 0.5;
+float w3 = sin(phase + 4.189) * 0.5 + 0.5;
+float wsum = w1 + w2 + w3 + 0.001;
+vec3 accent = (blueEdge * w1 + goldEdge * w2 + rustEdge * w3) / wsum;
+
+totalEmissiveRadiance += accent * fres * 0.40;`,
       );
     };
     // Shared geometry, four instances at different orientations.
@@ -169,97 +188,162 @@ totalEmissiveRadiance += mix(rustEdge, goldEdge, fres) * fres * 0.65;`,
     ribbon4.scale.setScalar(0.95);
     scene.add(ribbon1, ribbon2, ribbon3, ribbon4);
 
-    // MARK: Inner plasma. Six thin metallic torus bands at different orientations
-    // form an interwoven core that mutates without becoming a smooth blob. Strong
-    // saturation and high iridescence give a vivid color palette. Bright HDR
-    // emissive at world-space X poles produces the lateral spikes.
+    // MARK: Inner plasma. Raymarched volumetric singularity. The mesh is a
+    // bounding box; the front face is the ray entry and the fragment shader
+    // marches a chained-sine noise field along the view ray, accumulating
+    // color from our 15-stop gradient at multiple intensity powers.
+    //
+    // Technique inspired by Gemini's raymarched orb experiments: iterative
+    // chained-sine noise gives the vein/turbulence patterns, soft-glow
+    // accumulation `0.015/(0.015+|d|)` gives the cloud-edge feel, layered
+    // color powers stack a hot core inside a broader halo. Slow time evolution
+    // keeps it meditative instead of jittery.
     const plasmaUniforms = {
       u_time: { value: 0 },
       u_amp: { value: 0 },
     };
-    const plasmaMat = new THREE.MeshPhysicalMaterial({
-      color: 0x8822dd,
-      metalness: 0.85,
-      roughness: 0.13,
-      clearcoat: 1.0,
-      clearcoatRoughness: 0.04,
-      iridescence: 0.95,
-      iridescenceIOR: 1.45,
-      iridescenceThicknessRange: [180, 880],
-      envMapIntensity: 1.8,
-    });
-    plasmaMat.onBeforeCompile = (shader) => {
-      shader.uniforms.u_time = plasmaUniforms.u_time;
-      shader.uniforms.u_amp = plasmaUniforms.u_amp;
-      shader.vertexShader = shader.vertexShader.replace(
-        '#include <common>',
-        `#include <common>
-${SIMPLEX_3D}
+
+    const PLASMA_VERT = `
+varying vec3 vWorldPosition;
+void main() {
+  vWorldPosition = (modelMatrix * vec4(position, 1.0)).xyz;
+  gl_Position = projectionMatrix * viewMatrix * vec4(vWorldPosition, 1.0);
+}
+`;
+
+    const PLASMA_FRAG = `
 uniform float u_time;
 uniform float u_amp;
-varying vec3 vWorldPosition;`,
-      ).replace(
-        '#include <begin_vertex>',
-        `#include <begin_vertex>
-float n_a = snoise(position * 1.6 + vec3(u_time * 0.22));
-float n_b = snoise(position * 3.4 - vec3(u_time * 0.16)) * 0.45;
-float n_c = snoise(position * 6.2 + vec3(u_time * 0.10)) * 0.20;
-transformed += normal * (n_a + n_b + n_c) * (0.05 + u_amp * 0.10);
-vWorldPosition = (modelMatrix * vec4(transformed, 1.0)).xyz;`,
-      );
-      shader.fragmentShader = shader.fragmentShader.replace(
-        '#include <common>',
-        `#include <common>
-uniform float u_amp;
-varying vec3 vWorldPosition;`,
-      ).replace(
-        '#include <emissivemap_fragment>',
-        `#include <emissivemap_fragment>
-float xNorm = abs(vWorldPosition.x) / 0.95;
-float tipMix = smoothstep(0.78, 1.05, xNorm);
-vec3 tipEmissive = vec3(2.8, 2.9, 3.4);
-totalEmissiveRadiance += tipEmissive * tipMix * (1.0 + u_amp * 1.2);`,
-      );
-    };
-    // Six inner pieces. Four tori for the basic ring structure, two TorusKnots
-    // for flowing curves that break the regular ring pattern. Both share the
-    // same plasma material so they read as one cohesive interwoven core.
-    const plasmaGeom = new THREE.TorusGeometry(0.55, 0.05, 20, 220);
-    const plasmaKnotGeom = new THREE.TorusKnotGeometry(0.45, 0.045, 220, 24, 2, 3);
-    const plasmaA = new THREE.Mesh(plasmaGeom, plasmaMat);
-    const plasmaB = new THREE.Mesh(plasmaGeom, plasmaMat);
-    const plasmaC = new THREE.Mesh(plasmaGeom, plasmaMat);
-    const plasmaD = new THREE.Mesh(plasmaGeom, plasmaMat);
-    const plasmaE = new THREE.Mesh(plasmaKnotGeom, plasmaMat);
-    const plasmaF = new THREE.Mesh(plasmaKnotGeom, plasmaMat);
-    plasmaA.rotation.set(0, 0, 0);
-    plasmaB.rotation.set(Math.PI / 3, 0, Math.PI / 4);
-    plasmaC.rotation.set(0, Math.PI / 2, Math.PI / 3);
-    plasmaD.rotation.set(Math.PI / 5, Math.PI / 4, Math.PI / 6);
-    plasmaE.rotation.set(Math.PI / 2, Math.PI / 6, Math.PI / 2);
-    plasmaF.rotation.set(Math.PI / 7, Math.PI / 2, Math.PI / 5);
-    plasmaB.scale.setScalar(0.92);
-    plasmaC.scale.setScalar(0.84);
-    plasmaD.scale.setScalar(0.96);
-    plasmaE.scale.setScalar(0.88);
-    plasmaF.scale.setScalar(0.78);
-    // Bending-spacetime stretch. The whole cluster gets squashed vertically and
-    // pulled out horizontally so its equator widens toward the outer ribbons.
-    // Combined with the bright HDR tips at the new wider X extent, the inner
-    // mass appears to fuse with the outer rings at the equator via bloom.
-    const innerGroup = new THREE.Group();
-    innerGroup.scale.set(1.60, 0.82, 0.82);
-    innerGroup.add(plasmaA, plasmaB, plasmaC, plasmaD, plasmaE, plasmaF);
-    scene.add(innerGroup);
+varying vec3 vWorldPosition;
+
+mat3 rotY(float a) { float c = cos(a); float s = sin(a); return mat3(c, 0.0, s, 0.0, 1.0, 0.0, -s, 0.0, c); }
+
+const vec3 GRAD0  = vec3(0.878, 0.996, 1.000);
+const vec3 GRAD1  = vec3(0.741, 0.808, 0.875);
+const vec3 GRAD2  = vec3(0.600, 0.620, 0.749);
+const vec3 GRAD3  = vec3(0.463, 0.431, 0.624);
+const vec3 GRAD4  = vec3(0.400, 0.353, 0.549);
+const vec3 GRAD5  = vec3(0.341, 0.275, 0.471);
+const vec3 GRAD6  = vec3(0.278, 0.192, 0.396);
+const vec3 GRAD7  = vec3(0.216, 0.114, 0.318);
+const vec3 GRAD8  = vec3(0.278, 0.125, 0.361);
+const vec3 GRAD9  = vec3(0.337, 0.141, 0.408);
+const vec3 GRAD10 = vec3(0.400, 0.153, 0.451);
+const vec3 GRAD11 = vec3(0.537, 0.294, 0.584);
+const vec3 GRAD12 = vec3(0.678, 0.435, 0.718);
+const vec3 GRAD13 = vec3(0.816, 0.573, 0.851);
+const vec3 GRAD14 = vec3(0.953, 0.714, 0.984);
+
+vec3 gradient15(float t) {
+  t = clamp(t, 0.0, 0.9999) * 14.0;
+  float f = fract(t);
+  if (t < 1.0)  return mix(GRAD0,  GRAD1,  f);
+  if (t < 2.0)  return mix(GRAD1,  GRAD2,  f);
+  if (t < 3.0)  return mix(GRAD2,  GRAD3,  f);
+  if (t < 4.0)  return mix(GRAD3,  GRAD4,  f);
+  if (t < 5.0)  return mix(GRAD4,  GRAD5,  f);
+  if (t < 6.0)  return mix(GRAD5,  GRAD6,  f);
+  if (t < 7.0)  return mix(GRAD6,  GRAD7,  f);
+  if (t < 8.0)  return mix(GRAD7,  GRAD8,  f);
+  if (t < 9.0)  return mix(GRAD8,  GRAD9,  f);
+  if (t < 10.0) return mix(GRAD9,  GRAD10, f);
+  if (t < 11.0) return mix(GRAD10, GRAD11, f);
+  if (t < 12.0) return mix(GRAD11, GRAD12, f);
+  if (t < 13.0) return mix(GRAD12, GRAD13, f);
+  return mix(GRAD13, GRAD14, f);
+}
+
+// Stretched ellipsoid SDF with iterative chained-sine noise subtracted.
+// Anisotropic scale produces the gravity-well silhouette. Twist applies
+// frame-dragging style rotation at depth-dependent angle.
+float sdfMap(vec3 p) {
+  float baseR = length(p / vec3(1.05, 0.62, 0.62)) - 0.85;
+
+  float slowT = u_time * 0.10;
+  float twist = sin(length(p) * 1.8 - slowT);
+  vec3 q = rotY(twist * 0.5) * p * 1.15;
+
+  float f = 0.0;
+  float amp = 0.5;
+  for (int i = 0; i < 6; i++) {
+    q = rotY(slowT * 0.05) * q + slowT * 0.08;
+    f += amp * abs(sin(q.x + sin(q.y + sin(q.z))));
+    q *= 1.7;
+    amp *= 0.5;
+  }
+  return baseR - f * (0.25 + u_amp * 0.20);
+}
+
+void main() {
+  vec3 ro = cameraPosition;
+  vec3 rd = normalize(vWorldPosition - ro);
+
+  float t = 0.0;
+  vec3 col = vec3(0.0);
+
+  for (int i = 0; i < 60; i++) {
+    vec3 p = vWorldPosition + rd * t;
+    if (length(p) > 1.65) break;
+    if (t > 4.0) break;
+
+    float d = sdfMap(p);
+    float glow = 0.015 / (0.015 + abs(d));
+
+    // Drive 15-stop gradient by radial bias + slow spatial sine. Radial bias
+    // pulls dark mid-gradient colors toward the singularity center, lighter
+    // ends toward the outside.
+    float radialBias = clamp(length(p) / 1.4, 0.0, 1.0);
+    float colorPhase = sin(p.x * 1.5 + p.y * 1.0 + p.z * 1.2 + u_time * 0.08);
+    float gradT = clamp(colorPhase * 0.30 + (1.0 - radialBias) * 0.50 + 0.10, 0.0, 1.0);
+    vec3 baseColor = gradient15(gradT);
+
+    // Layered color powers: broad halo at glow^1, mid shell at glow^2.5,
+    // hot core at glow^10. Audio amplitude lifts the hot core during speech.
+    vec3 broadCol = baseColor * glow;
+    vec3 medCol   = baseColor * pow(glow, 2.5);
+    vec3 hotCol   = vec3(1.0, 0.96, 1.0) * pow(glow, 10.0) * (0.5 + u_amp * 0.6);
+    col += broadCol * 0.10 + medCol * 0.13 + hotCol * 0.08;
+
+    // Equatorial electric-blue spike: bright cyan halo and white-blue core
+    // right at y=0, large |x|. Same physics as before but evaluated per
+    // raymarch sample so the bloom catches it even through the volume.
+    float xNorm = abs(p.x) / 0.95;
+    float yProx = exp(-p.y * p.y * 35.0);
+    float spike = smoothstep(0.78, 1.05, xNorm) * yProx;
+    vec3 spikeColor = mix(vec3(0.30, 1.40, 2.60), vec3(1.50, 2.20, 3.00), smoothstep(0.92, 1.05, xNorm));
+    col += spikeColor * spike * pow(glow, 1.6) * (0.4 + u_amp * 0.4);
+
+    t += max(abs(d) * 0.55, 0.015);
+  }
+
+  gl_FragColor = vec4(col, 1.0);
+}
+`;
+
+    const plasmaMat = new THREE.ShaderMaterial({
+      uniforms: plasmaUniforms,
+      vertexShader: PLASMA_VERT,
+      fragmentShader: PLASMA_FRAG,
+      transparent: true,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    });
+    // Box bounds. Camera enters through the front face; raymarcher walks
+    // forward from there. Sized comfortably larger than the SDF volume so
+    // edge clipping never crops the cloudy silhouette.
+    const plasmaGeom = new THREE.BoxGeometry(2.6, 2.0, 2.0);
+    const plasma = new THREE.Mesh(plasmaGeom, plasmaMat);
+    plasma.renderOrder = -1;
+    scene.add(plasma);
 
     // MARK: Postprocessing. Modest bloom so tips spike but body keeps color.
     const composer = new EffectComposer(renderer);
     composer.addPass(new RenderPass(scene, camera));
     const bloom = new UnrealBloomPass(
       new THREE.Vector2(canvas.clientWidth, canvas.clientHeight),
-      0.42, // strength
-      0.55, // radius
-      0.85, // threshold (only the brightest tip pixels bloom)
+      0.28, // strength (was 0.42, the orb glow was overcooking)
+      0.40, // radius (was 0.55)
+      0.92, // threshold (was 0.85, only the brightest pixels bloom now)
     );
     composer.addPass(bloom);
     composer.addPass(new OutputPass());
@@ -335,7 +419,6 @@ totalEmissiveRadiance += tipEmissive * tipMix * (1.0 + u_amp * 1.2);`,
       ribbonGeom.dispose();
       ribbonMat.dispose();
       plasmaGeom.dispose();
-      plasmaKnotGeom.dispose();
       plasmaMat.dispose();
       envTexture.dispose();
       pmrem.dispose();
