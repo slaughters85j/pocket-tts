@@ -3,11 +3,17 @@ import * as THREE from 'three';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
+import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import type { StreamingWavPlayer } from '../lib/streaming-wav-player';
 
-// MARK: - Plasma shaders
+// MARK: - Inner plasma shaders
+//
+// The inner plasma is a horizontally-stretched ellipsoid with custom shader.
+// Body is purple-magenta. Horizontal tips are emissive white. Refracted by
+// the glass shell, those tips become the white "spike" lateral artifacts.
+// There are no external point lights. The brightness is the plasma itself.
 
-// 3D simplex noise — Ashima Arts / Stefan Gustavson, MIT.
 const SIMPLEX_3D = `
 vec3 mod289(vec3 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
 vec4 mod289(vec4 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
@@ -57,154 +63,12 @@ float snoise(vec3 v) {
 }
 `;
 
-// Glass shell — fresnel-only, cyan rim, transparent center, additive.
-const SHELL_VERTEX = `
-varying vec3 vNormal;
-varying vec3 vWorldPos;
-void main() {
-  vNormal = normalize(normalMatrix * normal);
-  vec4 wp = modelMatrix * vec4(position, 1.0);
-  vWorldPos = wp.xyz;
-  gl_Position = projectionMatrix * viewMatrix * wp;
-}
-`;
-
-const SHELL_FRAGMENT = `
-uniform float u_amp;
-uniform float u_active;
-varying vec3 vNormal;
-varying vec3 vWorldPos;
-
-void main() {
-  vec3 viewDir = normalize(cameraPosition - vWorldPos);
-  float fres   = pow(1.0 - max(dot(vNormal, viewDir), 0.0), 2.5);
-
-  vec3 cyanRim = vec3(0.40, 0.91, 1.00);   // #67e8f9 ish
-  vec3 col     = cyanRim * fres;
-  float a      = fres * (0.55 + u_active * 0.20 + u_amp * 0.15);
-
-  gl_FragColor = vec4(col, a);
-}
-`;
-
-// Inner plasma — magenta-purple volumetric blob, additive, soft falloff at silhouette.
-const PLASMA_VERTEX = `
-${SIMPLEX_3D}
-
-uniform float u_time;
-uniform float u_amp;
-
-varying vec3 vNormal;
-varying vec3 vWorldPos;
-varying float vNoise;
-
-void main() {
-  // 3D noise — slow base evolution, audio amplifies the second octave.
-  vec3 q = position * 1.4;
-  float n1 = snoise(q + vec3(u_time * 0.20));
-  float n2 = snoise(q * 2.1 - vec3(u_time * 0.14)) * 0.55;
-  float n  = n1 + n2;
-  vNoise = n;
-
-  float ampl = 0.06 + u_amp * 0.30;
-  vec3 displaced = position + normal * n * ampl;
-
-  vNormal   = normalize(normalMatrix * normal);
-  vec4 wp   = modelMatrix * vec4(displaced, 1.0);
-  vWorldPos = wp.xyz;
-  gl_Position = projectionMatrix * viewMatrix * wp;
-}
-`;
-
-const PLASMA_FRAGMENT = `
-uniform float u_amp;
-
-varying vec3 vNormal;
-varying vec3 vWorldPos;
-varying float vNoise;
-
-void main() {
-  // Inverse fresnel — opaque facing the camera, fades to zero at silhouette so
-  // the plasma never reaches the shell edge. This is the key to "volumetric blob".
-  vec3 viewDir = normalize(cameraPosition - vWorldPos);
-  float facing = max(dot(vNormal, viewDir), 0.0);
-  float a      = pow(facing, 1.6) * 0.85;
-
-  // Color — deep purple (#6b1fb8) → magenta (#d946ef) driven by the noise field.
-  vec3 deepPurple = vec3(0.42, 0.12, 0.72);
-  vec3 magenta    = vec3(0.85, 0.27, 0.94);
-  float t = clamp(vNoise * 0.5 + 0.5, 0.0, 1.0);
-  vec3 col = mix(deepPurple, magenta, t);
-
-  col *= 1.0 + u_amp * 0.45;
-
-  gl_FragColor = vec4(col * a, a);
-}
-`;
-
-// MARK: - Helpers
-
-function makeRadialTexture(stops: Array<[number, string]>, size = 256): THREE.CanvasTexture {
-  const c = document.createElement('canvas');
-  c.width = c.height = size;
-  const ctx = c.getContext('2d')!;
-  const grad = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
-  for (const [pos, color] of stops) grad.addColorStop(pos, color);
-  ctx.fillStyle = grad;
-  ctx.fillRect(0, 0, size, size);
-  const tex = new THREE.CanvasTexture(c);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  return tex;
-}
-
-interface NodeRefs {
-  group: THREE.Group;
-  core: THREE.Mesh;
-  halo: THREE.Sprite;
-  haloTex: THREE.CanvasTexture;
-}
-
-function makeEquatorialNode(x: number): NodeRefs {
-  const group = new THREE.Group();
-
-  const core = new THREE.Mesh(
-    new THREE.SphereGeometry(0.04, 16, 16),
-    new THREE.MeshBasicMaterial({
-      color: 0xffffff,
-      transparent: true,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
-    }),
-  );
-  group.add(core);
-
-  const haloTex = makeRadialTexture([
-    [0.0, 'rgba(255, 255, 255, 0.95)'],
-    [0.25, 'rgba(217, 70, 239, 0.55)'],
-    [0.55, 'rgba(103, 232, 249, 0.30)'],
-    [1.0, 'rgba(103, 232, 249, 0.0)'],
-  ]);
-  const halo = new THREE.Sprite(
-    new THREE.SpriteMaterial({
-      map: haloTex,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
-      transparent: true,
-    }),
-  );
-  halo.scale.set(0.55, 0.55, 1);
-  group.add(halo);
-
-  group.position.set(x, 0, 0);
-  return { group, core, halo, haloTex };
-}
-
 // MARK: - Component
 
 interface OrbProps {
-  /** Ref to the active StreamingWavPlayer (re-created per chat message). */
+  /** Active StreamingWavPlayer for FFT amplitude readout. */
   playerRef: React.RefObject<StreamingWavPlayer | null>;
-  /** Whether the assistant is currently active (LLM streaming or TTS playing). */
+  /** True while LLM is streaming or TTS is playing. */
   isActive: boolean;
 }
 
@@ -221,133 +85,114 @@ export function Orb({ playerRef, isActive }: OrbProps) {
     const renderer = new THREE.WebGLRenderer({
       canvas,
       antialias: true,
-      alpha: true,
-      premultipliedAlpha: false,
+      alpha: false,
+      premultipliedAlpha: true,
     });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.outputColorSpace = THREE.SRGBColorSpace;
-    renderer.toneMapping = THREE.NoToneMapping;
-    renderer.setClearColor(0x000000, 0);
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 0.95;
+    renderer.setClearColor(0x000000, 1);
 
     // MARK: Scene + camera
     const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x000000);
     const camera = new THREE.PerspectiveCamera(35, 1, 0.1, 100);
     camera.position.set(0, 0, 4.0);
-    camera.lookAt(0, 0, 0);
 
-    // MARK: Layer 1 — background cyan radial bloom
-    const bgTex = makeRadialTexture([
-      [0.0, 'rgba(6, 182, 212, 0.18)'],
-      [0.5, 'rgba(6, 182, 212, 0.06)'],
-      [1.0, 'rgba(0, 0, 0, 0.0)'],
-    ]);
-    const bg = new THREE.Sprite(
-      new THREE.SpriteMaterial({
-        map: bgTex,
-        blending: THREE.AdditiveBlending,
-        depthWrite: false,
-        depthTest: false,
-        transparent: true,
-      }),
-    );
-    bg.scale.set(6.0, 6.0, 1);
-    bg.position.z = -1.2;
-    bg.renderOrder = 0;
-    scene.add(bg);
+    // MARK: Environment map. Drives glossy reflections on the plasma metal.
+    // Per-material envMapIntensity lets us dim it on the shell separately.
+    const pmrem = new THREE.PMREMGenerator(renderer);
+    const envTexture = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+    scene.environment = envTexture;
+    scene.environmentIntensity = 1.0;
 
-    // MARK: Layer 2 — outer halo (breathing at ~0.3 Hz)
-    const haloTex = makeRadialTexture([
-      [0.0, 'rgba(103, 232, 249, 0.50)'],
-      [0.3, 'rgba(8, 145, 178, 0.25)'],
-      [1.0, 'rgba(8, 145, 178, 0.0)'],
-    ]);
-    const haloMat = new THREE.SpriteMaterial({
-      map: haloTex,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
+    // MARK: Glass shell. Transmission gives caustics and edge highlights.
+    // No tint, low roughness, slight thickness for refraction depth.
+    const shellMat = new THREE.MeshPhysicalMaterial({
+      color: 0xffffff,
+      transmission: 1.0,
+      thickness: 0.45,
+      roughness: 0.06,
+      ior: 1.42,
       transparent: true,
-      opacity: 0.5,
-    });
-    const halo = new THREE.Sprite(haloMat);
-    halo.scale.set(3.4, 3.4, 1);
-    halo.renderOrder = 1;
-    scene.add(halo);
-
-    // MARK: Layer 3 — glass shell (custom fresnel shader)
-    const shellUniforms = {
-      u_amp: { value: 0 },
-      u_active: { value: 0 },
-    };
-    const shellMat = new THREE.ShaderMaterial({
-      uniforms: shellUniforms,
-      vertexShader: SHELL_VERTEX,
-      fragmentShader: SHELL_FRAGMENT,
-      transparent: true,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
+      clearcoat: 1.0,
+      clearcoatRoughness: 0.0,
+      envMapIntensity: 0.6,
       side: THREE.FrontSide,
     });
     const shell = new THREE.Mesh(new THREE.SphereGeometry(1.0, 96, 96), shellMat);
-    shell.renderOrder = 3;
     scene.add(shell);
 
-    // MARK: Layer 4 — inner plasma core
+    // MARK: Inner plasma. Highly metallic purple sphere stretched horizontally.
+    // The PBR pipeline gives us env-map reflections, which is what produces the
+    // swirly fluid look on a glossy curved surface (no painted noise needed).
+    // onBeforeCompile injects two things into the standard PBR shader:
+    //   1. Vertex noise displacement so the surface isn't a plain ellipsoid.
+    //   2. HDR emissive at the horizontal poles so they bloom into spike artifacts
+    //      after passing through the glass shell's refraction.
     const plasmaUniforms = {
       u_time: { value: 0 },
       u_amp: { value: 0 },
     };
-    const plasmaMat = new THREE.ShaderMaterial({
-      uniforms: plasmaUniforms,
-      vertexShader: PLASMA_VERTEX,
-      fragmentShader: PLASMA_FRAGMENT,
-      transparent: true,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
+    const plasmaMat = new THREE.MeshPhysicalMaterial({
+      color: 0x5a1a99,
+      metalness: 0.92,
+      roughness: 0.18,
+      clearcoat: 1.0,
+      clearcoatRoughness: 0.04,
+      iridescence: 0.7,
+      iridescenceIOR: 1.35,
+      iridescenceThicknessRange: [200, 700],
+      envMapIntensity: 1.6,
     });
-    const plasma = new THREE.Mesh(new THREE.IcosahedronGeometry(0.55, 6), plasmaMat);
-    plasma.renderOrder = 2;
+    plasmaMat.onBeforeCompile = (shader) => {
+      shader.uniforms.u_time = plasmaUniforms.u_time;
+      shader.uniforms.u_amp = plasmaUniforms.u_amp;
+      shader.vertexShader = shader.vertexShader.replace(
+        '#include <common>',
+        `#include <common>
+${SIMPLEX_3D}
+uniform float u_time;
+uniform float u_amp;
+varying vec3 vObjectPos;`,
+      ).replace(
+        '#include <begin_vertex>',
+        `#include <begin_vertex>
+vObjectPos = position;
+float n_a = snoise(position * 1.6 + vec3(u_time * 0.20));
+float n_b = snoise(position * 3.1 - vec3(u_time * 0.13)) * 0.5;
+transformed += normal * (n_a + n_b) * (0.04 + u_amp * 0.10);`,
+      );
+      shader.fragmentShader = shader.fragmentShader.replace(
+        '#include <common>',
+        `#include <common>
+uniform float u_amp;
+varying vec3 vObjectPos;`,
+      ).replace(
+        '#include <emissivemap_fragment>',
+        `#include <emissivemap_fragment>
+float xNorm = abs(vObjectPos.x) / 0.55;
+float tipMix = smoothstep(0.82, 1.00, xNorm);
+vec3 tipEmissive = vec3(2.5, 2.7, 3.2);
+totalEmissiveRadiance += tipEmissive * tipMix * (1.0 + u_amp * 1.2);`,
+      );
+    };
+    const plasma = new THREE.Mesh(new THREE.SphereGeometry(0.55, 96, 96), plasmaMat);
+    plasma.scale.set(1.55, 0.95, 0.95);
     scene.add(plasma);
 
-    // MARK: Layer 5 — two equatorial nodes (left and right)
-    const nodeL = makeEquatorialNode(-1.02);
-    const nodeR = makeEquatorialNode(1.02);
-    nodeL.group.renderOrder = 5;
-    nodeR.group.renderOrder = 5;
-    scene.add(nodeL.group);
-    scene.add(nodeR.group);
-
-    // MARK: Layer 6 — faint meridian bands (concentric inner-shell hint)
-    const bandMat = new THREE.MeshBasicMaterial({
-      color: 0x67e8f9,
-      transparent: true,
-      opacity: 0.10,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
-    });
-    const bands: THREE.Mesh[] = [];
-    [
-      { rx: 0.0, ry: 0.0 },
-      { rx: Math.PI / 5, ry: 0.0 },
-      { rx: 0.0, ry: Math.PI / 5 },
-    ].forEach(({ rx, ry }) => {
-      const ring = new THREE.Mesh(new THREE.TorusGeometry(1.05, 0.004, 8, 160), bandMat);
-      ring.rotation.x = rx;
-      ring.rotation.y = ry;
-      ring.renderOrder = 4;
-      scene.add(ring);
-      bands.push(ring);
-    });
-
-    // MARK: Postprocessing — selective bloom on bright pixels
+    // MARK: Postprocessing. Modest bloom so tips spike but body keeps color.
     const composer = new EffectComposer(renderer);
     composer.addPass(new RenderPass(scene, camera));
-    const bloomPass = new UnrealBloomPass(
+    const bloom = new UnrealBloomPass(
       new THREE.Vector2(canvas.clientWidth, canvas.clientHeight),
       0.55, // strength
-      0.50, // radius
-      0.55, // threshold — nodes / shell rim bloom, plasma body doesn't
+      0.55, // radius
+      0.85, // threshold (only the brightest tip pixels bloom)
     );
-    composer.addPass(bloomPass);
+    composer.addPass(bloom);
+    composer.addPass(new OutputPass());
 
     // MARK: Resize
     const resize = () => {
@@ -355,7 +200,7 @@ export function Orb({ playerRef, isActive }: OrbProps) {
       const h = Math.max(1, canvas.clientHeight);
       renderer.setSize(w, h, false);
       composer.setSize(w, h);
-      bloomPass.setSize(w, h);
+      bloom.setSize(w, h);
       camera.aspect = w / h;
       camera.updateProjectionMatrix();
     };
@@ -374,7 +219,7 @@ export function Orb({ playerRef, isActive }: OrbProps) {
     const tick = () => {
       const t = (performance.now() - start) / 1000;
 
-      // Audio amplitude (0..1 voice activity)
+      // Voice activity amplitude (0..1)
       let rawAmp = 0;
       const player = playerRef.current;
       if (player && !player.isStopped) {
@@ -384,38 +229,19 @@ export function Orb({ playerRef, isActive }: OrbProps) {
         for (let i = 0; i < fftBins; i++) sum += dataArray[i];
         rawAmp = sum / (fftBins * 255);
       }
-      smoothAmp += (rawAmp - smoothAmp) * 0.20;
+      smoothAmp    += (rawAmp - smoothAmp) * 0.20;
       smoothActive += ((isActiveRef.current ? 1 : 0) - smoothActive) * 0.05;
 
-      // Layer 2 — halo: 0.3 Hz idle breathing + active bump + amp lift
-      const breath = 0.5 + 0.5 * Math.sin(t * Math.PI * 2.0 * 0.3);
-      haloMat.opacity = 0.20 + breath * 0.18 + smoothActive * 0.30 + smoothAmp * 0.30;
-
-      // Layer 3 — shell: amp + active boost the rim
-      shellUniforms.u_amp.value = smoothAmp;
-      shellUniforms.u_active.value = smoothActive;
-
-      // Layer 4 — plasma: noise evolves on its own; amp drives displacement
+      // Plasma uniforms drive the shader animation.
       plasmaUniforms.u_time.value = t;
       plasmaUniforms.u_amp.value = smoothAmp;
-      plasma.rotation.y = -t * 0.10;
-      plasma.rotation.x = Math.sin(t * 0.13) * 0.20;
 
-      // Layer 5 — nodes: idle pulse at 1 Hz when listening, amp drives during speech
-      const nodePulse = 0.5 + 0.5 * Math.sin(t * Math.PI * 2.0 * 1.0);
-      const nodeBright =
-        0.35 + smoothActive * 0.30 * nodePulse + smoothAmp * 0.55;
-      const nodeHaloScale = 0.55 + smoothAmp * 0.25 + smoothActive * 0.10 * nodePulse;
-      [nodeL, nodeR].forEach((n) => {
-        (n.core.material as THREE.MeshBasicMaterial).opacity = Math.min(nodeBright, 1.0);
-        n.halo.material.opacity = Math.min(nodeBright * 0.8, 1.0);
-        n.halo.scale.set(nodeHaloScale, nodeHaloScale, 1);
-      });
-
-      // Layer 6 — bands: very slow drift to imply concentric inner shells
-      bands[0].rotation.z = t * 0.05;
-      bands[1].rotation.z = -t * 0.04;
-      bands[2].rotation.z = t * 0.03;
+      // Slow tumble so the bright tips drift around the equator subtly.
+      // Audio activity speeds it up.
+      const rotSpeed = 0.5 + smoothActive * 0.6 + smoothAmp * 1.2;
+      plasma.rotation.y = t * 0.10 * rotSpeed;
+      plasma.rotation.z = Math.sin(t * 0.18) * 0.10;
+      plasma.rotation.x = Math.cos(t * 0.22) * 0.06;
 
       composer.render();
       raf = requestAnimationFrame(tick);
@@ -429,18 +255,8 @@ export function Orb({ playerRef, isActive }: OrbProps) {
       shellMat.dispose();
       plasma.geometry.dispose();
       plasmaMat.dispose();
-      bands.forEach((b) => b.geometry.dispose());
-      bandMat.dispose();
-      [nodeL, nodeR].forEach((n) => {
-        n.core.geometry.dispose();
-        (n.core.material as THREE.MeshBasicMaterial).dispose();
-        (n.halo.material as THREE.SpriteMaterial).dispose();
-        n.haloTex.dispose();
-      });
-      bgTex.dispose();
-      (bg.material as THREE.SpriteMaterial).dispose();
-      haloTex.dispose();
-      haloMat.dispose();
+      envTexture.dispose();
+      pmrem.dispose();
       composer.dispose();
       renderer.dispose();
     };
