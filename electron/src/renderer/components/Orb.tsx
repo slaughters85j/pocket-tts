@@ -155,16 +155,19 @@ vec3 rustEdge = vec3(0.55, 0.18, 0.05);
 totalEmissiveRadiance += mix(rustEdge, goldEdge, fres) * fres * 0.65;`,
       );
     };
-    // Shared geometry, three instances at different orientations.
-    const ribbonGeom = new THREE.TorusGeometry(1.05, 0.025, 24, 240);
+    // Shared geometry, four instances at different orientations.
+    const ribbonGeom = new THREE.TorusGeometry(1.05, 0.04, 24, 240);
     const ribbon1 = new THREE.Mesh(ribbonGeom, ribbonMat);
     const ribbon2 = new THREE.Mesh(ribbonGeom, ribbonMat);
     const ribbon3 = new THREE.Mesh(ribbonGeom, ribbonMat);
+    const ribbon4 = new THREE.Mesh(ribbonGeom, ribbonMat);
     ribbon1.rotation.set(0, 0, 0);
     ribbon2.rotation.set(Math.PI / 2, 0, 0);
     ribbon3.rotation.set(Math.PI / 4, Math.PI / 3, Math.PI / 6);
+    ribbon4.rotation.set(Math.PI / 6, -Math.PI / 4, Math.PI / 3);
     ribbon3.scale.setScalar(0.88);
-    scene.add(ribbon1, ribbon2, ribbon3);
+    ribbon4.scale.setScalar(0.95);
+    scene.add(ribbon1, ribbon2, ribbon3, ribbon4);
 
     // MARK: Inner plasma. Six thin metallic torus bands at different orientations
     // form an interwoven core that mutates without becoming a smooth blob. Strong
@@ -218,14 +221,17 @@ vec3 tipEmissive = vec3(2.8, 2.9, 3.4);
 totalEmissiveRadiance += tipEmissive * tipMix * (1.0 + u_amp * 1.2);`,
       );
     };
-    // Six thin tori at varied orientations and slight scales build the core.
+    // Six inner pieces. Four tori for the basic ring structure, two TorusKnots
+    // for flowing curves that break the regular ring pattern. Both share the
+    // same plasma material so they read as one cohesive interwoven core.
     const plasmaGeom = new THREE.TorusGeometry(0.55, 0.05, 20, 220);
+    const plasmaKnotGeom = new THREE.TorusKnotGeometry(0.45, 0.045, 220, 24, 2, 3);
     const plasmaA = new THREE.Mesh(plasmaGeom, plasmaMat);
     const plasmaB = new THREE.Mesh(plasmaGeom, plasmaMat);
     const plasmaC = new THREE.Mesh(plasmaGeom, plasmaMat);
     const plasmaD = new THREE.Mesh(plasmaGeom, plasmaMat);
-    const plasmaE = new THREE.Mesh(plasmaGeom, plasmaMat);
-    const plasmaF = new THREE.Mesh(plasmaGeom, plasmaMat);
+    const plasmaE = new THREE.Mesh(plasmaKnotGeom, plasmaMat);
+    const plasmaF = new THREE.Mesh(plasmaKnotGeom, plasmaMat);
     plasmaA.rotation.set(0, 0, 0);
     plasmaB.rotation.set(Math.PI / 3, 0, Math.PI / 4);
     plasmaC.rotation.set(0, Math.PI / 2, Math.PI / 3);
@@ -235,8 +241,8 @@ totalEmissiveRadiance += tipEmissive * tipMix * (1.0 + u_amp * 1.2);`,
     plasmaB.scale.setScalar(0.92);
     plasmaC.scale.setScalar(0.84);
     plasmaD.scale.setScalar(0.96);
-    plasmaE.scale.setScalar(0.78);
-    plasmaF.scale.setScalar(0.88);
+    plasmaE.scale.setScalar(0.88);
+    plasmaF.scale.setScalar(0.78);
     // Bending-spacetime stretch. The whole cluster gets squashed vertically and
     // pulled out horizontally so its equator widens toward the outer ribbons.
     // Combined with the bright HDR tips at the new wider X extent, the inner
@@ -251,7 +257,7 @@ totalEmissiveRadiance += tipEmissive * tipMix * (1.0 + u_amp * 1.2);`,
     composer.addPass(new RenderPass(scene, camera));
     const bloom = new UnrealBloomPass(
       new THREE.Vector2(canvas.clientWidth, canvas.clientHeight),
-      0.55, // strength
+      0.42, // strength
       0.55, // radius
       0.85, // threshold (only the brightest tip pixels bloom)
     );
@@ -314,6 +320,9 @@ totalEmissiveRadiance += tipEmissive * tipMix * (1.0 + u_amp * 1.2);`,
       ribbon3.rotation.x = Math.PI / 4 + Math.sin(t * 0.10) * 0.45;
       ribbon3.rotation.y = Math.PI / 3 + Math.cos(t * 0.13) * 0.35;
       ribbon3.rotation.z = Math.PI / 6 + Math.sin(t * 0.08) * 0.30;
+      ribbon4.rotation.x = Math.PI / 6 + Math.cos(t * 0.12) * 0.40;
+      ribbon4.rotation.y = -Math.PI / 4 + Math.sin(t * 0.05) * 0.32;
+      ribbon4.rotation.z = Math.PI / 3 + Math.cos(t * 0.09) * 0.28;
 
       composer.render();
       raf = requestAnimationFrame(tick);
@@ -326,6 +335,7 @@ totalEmissiveRadiance += tipEmissive * tipMix * (1.0 + u_amp * 1.2);`,
       ribbonGeom.dispose();
       ribbonMat.dispose();
       plasmaGeom.dispose();
+      plasmaKnotGeom.dispose();
       plasmaMat.dispose();
       envTexture.dispose();
       pmrem.dispose();
