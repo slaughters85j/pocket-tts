@@ -107,44 +107,83 @@ export function Orb({ playerRef, isActive }: OrbProps) {
     scene.environment = envTexture;
     scene.environmentIntensity = 1.0;
 
-    // MARK: Glass shell. Transmission gives caustics and edge highlights.
-    // No tint, low roughness, slight thickness for refraction depth.
-    const shellMat = new THREE.MeshPhysicalMaterial({
+    // MARK: Cosmic ribbons. Three thin glass torus bands at different orientations
+    // around the plasma core. A vertex-shader wave deforms each ribbon over time
+    // so they bend and flex like elastic ribbons flowing through spacetime.
+    // Glass material gives transmission, refraction, and edge highlights.
+    const ribbonUniforms = {
+      u_time: { value: 0 },
+      u_amp: { value: 0 },
+    };
+    const ribbonMat = new THREE.MeshPhysicalMaterial({
       color: 0xffffff,
       transmission: 1.0,
-      thickness: 0.45,
-      roughness: 0.06,
+      thickness: 0.25,
+      roughness: 0.04,
       ior: 1.42,
       transparent: true,
       clearcoat: 1.0,
       clearcoatRoughness: 0.0,
-      envMapIntensity: 0.6,
-      side: THREE.FrontSide,
+      envMapIntensity: 0.7,
+      side: THREE.DoubleSide,
     });
-    const shell = new THREE.Mesh(new THREE.SphereGeometry(1.0, 96, 96), shellMat);
-    scene.add(shell);
+    ribbonMat.onBeforeCompile = (shader) => {
+      shader.uniforms.u_time = ribbonUniforms.u_time;
+      shader.uniforms.u_amp = ribbonUniforms.u_amp;
+      shader.vertexShader = shader.vertexShader.replace(
+        '#include <common>',
+        `#include <common>
+${SIMPLEX_3D}
+uniform float u_time;
+uniform float u_amp;`,
+      ).replace(
+        '#include <begin_vertex>',
+        `#include <begin_vertex>
+float n_a = snoise(position * 1.2 + vec3(u_time * 0.30));
+float n_b = snoise(position * 2.5 - vec3(u_time * 0.21)) * 0.5;
+transformed += normal * (n_a + n_b) * (0.04 + u_amp * 0.06);`,
+      );
+      // Fresnel-driven warm metal accents on ribbon edges. Glancing angles get
+      // gold, deeper view directions get rust. Subtle HDR so they bloom faintly.
+      shader.fragmentShader = shader.fragmentShader.replace(
+        '#include <emissivemap_fragment>',
+        `#include <emissivemap_fragment>
+vec3 vDir = normalize(vViewPosition);
+float fres = pow(1.0 - max(dot(normalize(vNormal), vDir), 0.0), 2.2);
+vec3 goldEdge = vec3(1.30, 0.78, 0.22);
+vec3 rustEdge = vec3(0.55, 0.18, 0.05);
+totalEmissiveRadiance += mix(rustEdge, goldEdge, fres) * fres * 0.65;`,
+      );
+    };
+    // Shared geometry, three instances at different orientations.
+    const ribbonGeom = new THREE.TorusGeometry(1.05, 0.025, 24, 240);
+    const ribbon1 = new THREE.Mesh(ribbonGeom, ribbonMat);
+    const ribbon2 = new THREE.Mesh(ribbonGeom, ribbonMat);
+    const ribbon3 = new THREE.Mesh(ribbonGeom, ribbonMat);
+    ribbon1.rotation.set(0, 0, 0);
+    ribbon2.rotation.set(Math.PI / 2, 0, 0);
+    ribbon3.rotation.set(Math.PI / 4, Math.PI / 3, Math.PI / 6);
+    ribbon3.scale.setScalar(0.88);
+    scene.add(ribbon1, ribbon2, ribbon3);
 
-    // MARK: Inner plasma. Highly metallic purple sphere stretched horizontally.
-    // The PBR pipeline gives us env-map reflections, which is what produces the
-    // swirly fluid look on a glossy curved surface (no painted noise needed).
-    // onBeforeCompile injects two things into the standard PBR shader:
-    //   1. Vertex noise displacement so the surface isn't a plain ellipsoid.
-    //   2. HDR emissive at the horizontal poles so they bloom into spike artifacts
-    //      after passing through the glass shell's refraction.
+    // MARK: Inner plasma. Six thin metallic torus bands at different orientations
+    // form an interwoven core that mutates without becoming a smooth blob. Strong
+    // saturation and high iridescence give a vivid color palette. Bright HDR
+    // emissive at world-space X poles produces the lateral spikes.
     const plasmaUniforms = {
       u_time: { value: 0 },
       u_amp: { value: 0 },
     };
     const plasmaMat = new THREE.MeshPhysicalMaterial({
-      color: 0x5a1a99,
-      metalness: 0.92,
-      roughness: 0.18,
+      color: 0x8822dd,
+      metalness: 0.85,
+      roughness: 0.13,
       clearcoat: 1.0,
       clearcoatRoughness: 0.04,
-      iridescence: 0.7,
-      iridescenceIOR: 1.35,
-      iridescenceThicknessRange: [200, 700],
-      envMapIntensity: 1.6,
+      iridescence: 0.95,
+      iridescenceIOR: 1.45,
+      iridescenceThicknessRange: [180, 880],
+      envMapIntensity: 1.8,
     });
     plasmaMat.onBeforeCompile = (shader) => {
       shader.uniforms.u_time = plasmaUniforms.u_time;
@@ -155,32 +194,57 @@ export function Orb({ playerRef, isActive }: OrbProps) {
 ${SIMPLEX_3D}
 uniform float u_time;
 uniform float u_amp;
-varying vec3 vObjectPos;`,
+varying vec3 vWorldPosition;`,
       ).replace(
         '#include <begin_vertex>',
         `#include <begin_vertex>
-vObjectPos = position;
-float n_a = snoise(position * 1.6 + vec3(u_time * 0.20));
-float n_b = snoise(position * 3.1 - vec3(u_time * 0.13)) * 0.5;
-transformed += normal * (n_a + n_b) * (0.04 + u_amp * 0.10);`,
+float n_a = snoise(position * 1.6 + vec3(u_time * 0.22));
+float n_b = snoise(position * 3.4 - vec3(u_time * 0.16)) * 0.45;
+float n_c = snoise(position * 6.2 + vec3(u_time * 0.10)) * 0.20;
+transformed += normal * (n_a + n_b + n_c) * (0.05 + u_amp * 0.10);
+vWorldPosition = (modelMatrix * vec4(transformed, 1.0)).xyz;`,
       );
       shader.fragmentShader = shader.fragmentShader.replace(
         '#include <common>',
         `#include <common>
 uniform float u_amp;
-varying vec3 vObjectPos;`,
+varying vec3 vWorldPosition;`,
       ).replace(
         '#include <emissivemap_fragment>',
         `#include <emissivemap_fragment>
-float xNorm = abs(vObjectPos.x) / 0.55;
-float tipMix = smoothstep(0.82, 1.00, xNorm);
-vec3 tipEmissive = vec3(2.5, 2.7, 3.2);
+float xNorm = abs(vWorldPosition.x) / 0.95;
+float tipMix = smoothstep(0.78, 1.05, xNorm);
+vec3 tipEmissive = vec3(2.8, 2.9, 3.4);
 totalEmissiveRadiance += tipEmissive * tipMix * (1.0 + u_amp * 1.2);`,
       );
     };
-    const plasma = new THREE.Mesh(new THREE.SphereGeometry(0.55, 96, 96), plasmaMat);
-    plasma.scale.set(1.55, 0.95, 0.95);
-    scene.add(plasma);
+    // Six thin tori at varied orientations and slight scales build the core.
+    const plasmaGeom = new THREE.TorusGeometry(0.55, 0.05, 20, 220);
+    const plasmaA = new THREE.Mesh(plasmaGeom, plasmaMat);
+    const plasmaB = new THREE.Mesh(plasmaGeom, plasmaMat);
+    const plasmaC = new THREE.Mesh(plasmaGeom, plasmaMat);
+    const plasmaD = new THREE.Mesh(plasmaGeom, plasmaMat);
+    const plasmaE = new THREE.Mesh(plasmaGeom, plasmaMat);
+    const plasmaF = new THREE.Mesh(plasmaGeom, plasmaMat);
+    plasmaA.rotation.set(0, 0, 0);
+    plasmaB.rotation.set(Math.PI / 3, 0, Math.PI / 4);
+    plasmaC.rotation.set(0, Math.PI / 2, Math.PI / 3);
+    plasmaD.rotation.set(Math.PI / 5, Math.PI / 4, Math.PI / 6);
+    plasmaE.rotation.set(Math.PI / 2, Math.PI / 6, Math.PI / 2);
+    plasmaF.rotation.set(Math.PI / 7, Math.PI / 2, Math.PI / 5);
+    plasmaB.scale.setScalar(0.92);
+    plasmaC.scale.setScalar(0.84);
+    plasmaD.scale.setScalar(0.96);
+    plasmaE.scale.setScalar(0.78);
+    plasmaF.scale.setScalar(0.88);
+    // Bending-spacetime stretch. The whole cluster gets squashed vertically and
+    // pulled out horizontally so its equator widens toward the outer ribbons.
+    // Combined with the bright HDR tips at the new wider X extent, the inner
+    // mass appears to fuse with the outer rings at the equator via bloom.
+    const innerGroup = new THREE.Group();
+    innerGroup.scale.set(1.60, 0.82, 0.82);
+    innerGroup.add(plasmaA, plasmaB, plasmaC, plasmaD, plasmaE, plasmaF);
+    scene.add(innerGroup);
 
     // MARK: Postprocessing. Modest bloom so tips spike but body keeps color.
     const composer = new EffectComposer(renderer);
@@ -208,12 +272,11 @@ totalEmissiveRadiance += tipEmissive * tipMix * (1.0 + u_amp * 1.2);`,
     ro.observe(canvas);
     resize();
 
-    // MARK: Animation loop
+    // MARK: Animation loop. Speaking-mode only. Audio amplitude is the sole driver.
     const start = performance.now();
     const fftBins = 64;
     const dataArray = new Uint8Array(fftBins);
     let smoothAmp = 0;
-    let smoothActive = 0;
     let raf = 0;
 
     const tick = () => {
@@ -229,19 +292,28 @@ totalEmissiveRadiance += tipEmissive * tipMix * (1.0 + u_amp * 1.2);`,
         for (let i = 0; i < fftBins; i++) sum += dataArray[i];
         rawAmp = sum / (fftBins * 255);
       }
-      smoothAmp    += (rawAmp - smoothAmp) * 0.20;
-      smoothActive += ((isActiveRef.current ? 1 : 0) - smoothActive) * 0.05;
+      smoothAmp += (rawAmp - smoothAmp) * 0.20;
 
-      // Plasma uniforms drive the shader animation.
+      // Plasma uniforms drive vertex displacement and HDR tip emissive.
+      // No rotation: surface evolves in place via time-driven noise so it reads
+      // as fluid flow rather than a spinning solid.
       plasmaUniforms.u_time.value = t;
       plasmaUniforms.u_amp.value = smoothAmp;
 
-      // Slow tumble so the bright tips drift around the equator subtly.
-      // Audio activity speeds it up.
-      const rotSpeed = 0.5 + smoothActive * 0.6 + smoothAmp * 1.2;
-      plasma.rotation.y = t * 0.10 * rotSpeed;
-      plasma.rotation.z = Math.sin(t * 0.18) * 0.10;
-      plasma.rotation.x = Math.cos(t * 0.22) * 0.06;
+      // Ribbon uniforms drive their wave deformation independently.
+      ribbonUniforms.u_time.value = t;
+      ribbonUniforms.u_amp.value = smoothAmp;
+
+      // Slow orbital drift on each ribbon so they mutate into and out of each
+      // other rather than holding fixed orientations. Different frequencies per
+      // ribbon and per axis ensure they never settle into a repeating pattern.
+      ribbon1.rotation.x = Math.sin(t * 0.07) * 0.35;
+      ribbon1.rotation.z = t * 0.03 + Math.cos(t * 0.11) * 0.20;
+      ribbon2.rotation.x = Math.PI / 2 + Math.sin(t * 0.09) * 0.40;
+      ribbon2.rotation.y = Math.cos(t * 0.06) * 0.25;
+      ribbon3.rotation.x = Math.PI / 4 + Math.sin(t * 0.10) * 0.45;
+      ribbon3.rotation.y = Math.PI / 3 + Math.cos(t * 0.13) * 0.35;
+      ribbon3.rotation.z = Math.PI / 6 + Math.sin(t * 0.08) * 0.30;
 
       composer.render();
       raf = requestAnimationFrame(tick);
@@ -251,9 +323,9 @@ totalEmissiveRadiance += tipEmissive * tipMix * (1.0 + u_amp * 1.2);`,
     return () => {
       cancelAnimationFrame(raf);
       ro.disconnect();
-      shell.geometry.dispose();
-      shellMat.dispose();
-      plasma.geometry.dispose();
+      ribbonGeom.dispose();
+      ribbonMat.dispose();
+      plasmaGeom.dispose();
       plasmaMat.dispose();
       envTexture.dispose();
       pmrem.dispose();
