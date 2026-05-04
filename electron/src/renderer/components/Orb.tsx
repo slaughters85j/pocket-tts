@@ -1,136 +1,203 @@
 import React, { useEffect, useRef } from 'react';
+import * as THREE from 'three';
+import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import type { StreamingWavPlayer } from '../lib/streaming-wav-player';
 
-// MARK: - Shaders
+// MARK: - Plasma shaders
 
-const VERTEX_SHADER = `
-attribute vec2 a_position;
-void main() {
-  gl_Position = vec4(a_position, 0.0, 1.0);
+// 3D simplex noise — Ashima Arts / Stefan Gustavson, MIT.
+const SIMPLEX_3D = `
+vec3 mod289(vec3 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
+vec4 mod289(vec4 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
+vec4 permute(vec4 x) { return mod289(((x * 34.0) + 10.0) * x); }
+vec4 taylorInvSqrt(vec4 r) { return 1.79284291400159 - 0.85373472095314 * r; }
+float snoise(vec3 v) {
+  const vec2 C = vec2(1.0/6.0, 1.0/3.0);
+  const vec4 D = vec4(0.0, 0.5, 1.0, 2.0);
+  vec3 i  = floor(v + dot(v, C.yyy));
+  vec3 x0 = v - i + dot(i, C.xxx);
+  vec3 g = step(x0.yzx, x0.xyz);
+  vec3 l = 1.0 - g;
+  vec3 i1 = min(g.xyz, l.zxy);
+  vec3 i2 = max(g.xyz, l.zxy);
+  vec3 x1 = x0 - i1 + C.xxx;
+  vec3 x2 = x0 - i2 + C.yyy;
+  vec3 x3 = x0 - D.yyy;
+  i = mod289(i);
+  vec4 p = permute(permute(permute(
+            i.z + vec4(0.0, i1.z, i2.z, 1.0))
+          + i.y + vec4(0.0, i1.y, i2.y, 1.0))
+          + i.x + vec4(0.0, i1.x, i2.x, 1.0));
+  float n_ = 0.142857142857;
+  vec3 ns = n_ * D.wyz - D.xzx;
+  vec4 j = p - 49.0 * floor(p * ns.z * ns.z);
+  vec4 x_ = floor(j * ns.z);
+  vec4 y_ = floor(j - 7.0 * x_);
+  vec4 x = x_ * ns.x + ns.yyyy;
+  vec4 y = y_ * ns.x + ns.yyyy;
+  vec4 h = 1.0 - abs(x) - abs(y);
+  vec4 b0 = vec4(x.xy, y.xy);
+  vec4 b1 = vec4(x.zw, y.zw);
+  vec4 s0 = floor(b0) * 2.0 + 1.0;
+  vec4 s1 = floor(b1) * 2.0 + 1.0;
+  vec4 sh = -step(h, vec4(0.0));
+  vec4 a0 = b0.xzyw + s0.xzyw * sh.xxyy;
+  vec4 a1 = b1.xzyw + s1.xzyw * sh.zzww;
+  vec3 p0 = vec3(a0.xy, h.x);
+  vec3 p1 = vec3(a0.zw, h.y);
+  vec3 p2 = vec3(a1.xy, h.z);
+  vec3 p3 = vec3(a1.zw, h.w);
+  vec4 norm = taylorInvSqrt(vec4(dot(p0, p0), dot(p1, p1), dot(p2, p2), dot(p3, p3)));
+  p0 *= norm.x; p1 *= norm.y; p2 *= norm.z; p3 *= norm.w;
+  vec4 m = max(0.6 - vec4(dot(x0, x0), dot(x1, x1), dot(x2, x2), dot(x3, x3)), 0.0);
+  m = m * m;
+  return 42.0 * dot(m * m, vec4(dot(p0, x0), dot(p1, x1), dot(p2, x2), dot(p3, x3)));
 }
 `;
 
-// "Glass orb with internal fluid" — defined dark sphere with violet/purple swirling
-// fluid inside, fresnel rim, anisotropic latitude bands wrapping around, and bright
-// specular hotspots on the left/right equator. Stable & slow, not erratic.
-const FRAGMENT_SHADER = `
-precision highp float;
+// Glass shell — fresnel-only, cyan rim, transparent center, additive.
+const SHELL_VERTEX = `
+varying vec3 vNormal;
+varying vec3 vWorldPos;
+void main() {
+  vNormal = normalize(normalMatrix * normal);
+  vec4 wp = modelMatrix * vec4(position, 1.0);
+  vWorldPos = wp.xyz;
+  gl_Position = projectionMatrix * viewMatrix * wp;
+}
+`;
+
+const SHELL_FRAGMENT = `
+uniform float u_amp;
+uniform float u_active;
+varying vec3 vNormal;
+varying vec3 vWorldPos;
+
+void main() {
+  vec3 viewDir = normalize(cameraPosition - vWorldPos);
+  float fres   = pow(1.0 - max(dot(vNormal, viewDir), 0.0), 2.5);
+
+  vec3 cyanRim = vec3(0.40, 0.91, 1.00);   // #67e8f9 ish
+  vec3 col     = cyanRim * fres;
+  float a      = fres * (0.55 + u_active * 0.20 + u_amp * 0.15);
+
+  gl_FragColor = vec4(col, a);
+}
+`;
+
+// Inner plasma — magenta-purple volumetric blob, additive, soft falloff at silhouette.
+const PLASMA_VERTEX = `
+${SIMPLEX_3D}
+
 uniform float u_time;
-uniform float u_energy;   // 0..1 instantaneous audio level
-uniform float u_active;   // 0..1 LLM/TTS active flag (smoothed)
-uniform vec2  u_resolution;
+uniform float u_amp;
 
-float hash(vec2 p) {
-  return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
-}
-
-float noise(vec2 p) {
-  vec2 i = floor(p);
-  vec2 f = fract(p);
-  f = f * f * (3.0 - 2.0 * f);
-  return mix(
-    mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x),
-    mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x),
-    f.y
-  );
-}
-
-float fbm(vec2 p) {
-  float v = 0.0;
-  float a = 0.5;
-  for (int i = 0; i < 5; i++) {
-    v += a * noise(p);
-    p *= 2.0;
-    a *= 0.5;
-  }
-  return v;
-}
-
-// Thin highlight arc — band on the sphere where dot(N, L) sits at value c.
-// Projected to 2D, this reads as a curved highlight (specular reflection of a
-// distant light off the glass surface).
-float arcBand(vec3 N, vec3 L, float c, float w) {
-  float d = abs(dot(normalize(L), N) - c);
-  return smoothstep(w, w * 0.25, d);
-}
+varying vec3 vNormal;
+varying vec3 vWorldPos;
+varying float vNoise;
 
 void main() {
-  vec2 uv = (gl_FragCoord.xy - 0.5 * u_resolution) / min(u_resolution.x, u_resolution.y);
+  // 3D noise — slow base evolution, audio amplifies the second octave.
+  vec3 q = position * 1.4;
+  float n1 = snoise(q + vec3(u_time * 0.20));
+  float n2 = snoise(q * 2.1 - vec3(u_time * 0.14)) * 0.55;
+  float n  = n1 + n2;
+  vNoise = n;
 
-  float R  = 0.40;            // sphere radius
-  float R2 = R * R;
-  float r  = length(uv);
-  float r2 = dot(uv, uv);
+  float ampl = 0.06 + u_amp * 0.30;
+  vec3 displaced = position + normal * n * ampl;
 
-  // Sphere depth (z² = R² - r²) — unit normal of the implicit sphere at this pixel.
-  float z2 = max(R2 - r2, 0.0);
-  float z  = sqrt(z2);
-  vec3  N  = vec3(uv.x, uv.y, z) / R;
-
-  // Smooth sphere mask + outer halo so the boundary anti-aliases cleanly.
-  float sphereMask = smoothstep(R2 + 0.006, R2 - 0.006, r2);
-  float outerHalo  = exp(-(r - R) * 9.0) * (1.0 - sphereMask);
-
-  // Thin fresnel rim — high power keeps the silhouette as a crisp glass edge.
-  float fres = pow(1.0 - max(N.z, 0.0), 6.0);
-
-  // Curved highlight arcs — specular reflections of fake key/rim lights, each
-  // appears as a curve on the sphere where dot(N, L) sits at a fixed angle.
-  float arcTop = arcBand(N, vec3( 0.00,  0.85, 0.55), 0.62, 0.040);
-  float arcBtm = arcBand(N, vec3( 0.00, -0.85, 0.55), 0.65, 0.050);
-  float arcL   = arcBand(N, vec3(-0.85,  0.10, 0.45), 0.55, 0.030);
-  float arcR   = arcBand(N, vec3( 0.85,  0.10, 0.45), 0.55, 0.030);
-  float arcUp  = arcBand(N, vec3( 0.00,  0.65, 0.75), 0.40, 0.030);  // softer upper band
-  float arcs   = arcTop + arcBtm + arcL + arcR + arcUp;
-
-  // Internal fluid — slow, viscous, domain-warped swirl.
-  float fluidSpeed = 1.0 + u_energy * 0.6 + u_active * 0.15;
-  vec2  fluidUv    = uv * 1.8;
-  vec2  fluidWarp  = vec2(
-    fbm(fluidUv * 0.75 + vec2(u_time * 0.05 * fluidSpeed, 0.0)),
-    fbm(fluidUv * 0.75 + vec2(0.0, u_time * 0.06 * fluidSpeed) + 5.0)
-  ) - 0.5;
-  fluidUv += fluidWarp * 0.45;
-  float swirl1 = fbm(fluidUv + vec2(u_time * 0.10 * fluidSpeed, u_time * 0.055 * fluidSpeed));
-  float swirl2 = fbm(fluidUv * 1.5 - vec2(u_time * 0.065 * fluidSpeed, u_time * 0.09 * fluidSpeed) + 9.0);
-  float swirl  = swirl1 * 0.55 + swirl2 * 0.45;
-
-  // Internal palette — deep violet base, bright violet body, white-purple specular peaks.
-  vec3 deepViolet   = vec3(0.06, 0.02, 0.18);
-  vec3 brightViolet = vec3(0.55, 0.18, 0.85);
-  vec3 specPeak     = vec3(0.95, 0.85, 1.00);
-
-  vec3 fluidCol = mix(deepViolet, brightViolet, smoothstep(0.40, 0.78, swirl));
-  fluidCol += specPeak * pow(max(swirl - 0.70, 0.0), 4.0) * 1.8;
-
-  // Concentrate the swirl as a "blob in the middle" rather than filling the whole
-  // sphere — Gaussian falloff toward the silhouette so the outer shell reads as
-  // clear glass with just the rim and arc highlights.
-  float blobMask = exp(-r2 * 6.0);
-
-  // --- Composite ---
-  vec3 col = vec3(0.0);
-
-  // Internal fluid blob (concentrated near center, behind the glass shell)
-  col += fluidCol * blobMask * sphereMask;
-
-  // Thin fresnel rim — pale blue-white edge of the glass shell
-  col += vec3(0.65, 0.75, 1.00) * fres * 0.95 * sphereMask;
-
-  // Curved highlight arcs — bright white-blue specular reflections on the shell
-  col += vec3(0.95, 0.97, 1.00) * arcs * 0.85 * sphereMask;
-
-  // Outer halo
-  col += vec3(0.20, 0.25, 0.55) * outerHalo * 0.30;
-
-  // Audio reactivity
-  col *= 1.0 + u_energy * 0.30;
-
-  col = col / (1.0 + col * 0.40);
-
-  gl_FragColor = vec4(col, 1.0);
+  vNormal   = normalize(normalMatrix * normal);
+  vec4 wp   = modelMatrix * vec4(displaced, 1.0);
+  vWorldPos = wp.xyz;
+  gl_Position = projectionMatrix * viewMatrix * wp;
 }
 `;
+
+const PLASMA_FRAGMENT = `
+uniform float u_amp;
+
+varying vec3 vNormal;
+varying vec3 vWorldPos;
+varying float vNoise;
+
+void main() {
+  // Inverse fresnel — opaque facing the camera, fades to zero at silhouette so
+  // the plasma never reaches the shell edge. This is the key to "volumetric blob".
+  vec3 viewDir = normalize(cameraPosition - vWorldPos);
+  float facing = max(dot(vNormal, viewDir), 0.0);
+  float a      = pow(facing, 1.6) * 0.85;
+
+  // Color — deep purple (#6b1fb8) → magenta (#d946ef) driven by the noise field.
+  vec3 deepPurple = vec3(0.42, 0.12, 0.72);
+  vec3 magenta    = vec3(0.85, 0.27, 0.94);
+  float t = clamp(vNoise * 0.5 + 0.5, 0.0, 1.0);
+  vec3 col = mix(deepPurple, magenta, t);
+
+  col *= 1.0 + u_amp * 0.45;
+
+  gl_FragColor = vec4(col * a, a);
+}
+`;
+
+// MARK: - Helpers
+
+function makeRadialTexture(stops: Array<[number, string]>, size = 256): THREE.CanvasTexture {
+  const c = document.createElement('canvas');
+  c.width = c.height = size;
+  const ctx = c.getContext('2d')!;
+  const grad = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+  for (const [pos, color] of stops) grad.addColorStop(pos, color);
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, size, size);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+interface NodeRefs {
+  group: THREE.Group;
+  core: THREE.Mesh;
+  halo: THREE.Sprite;
+  haloTex: THREE.CanvasTexture;
+}
+
+function makeEquatorialNode(x: number): NodeRefs {
+  const group = new THREE.Group();
+
+  const core = new THREE.Mesh(
+    new THREE.SphereGeometry(0.04, 16, 16),
+    new THREE.MeshBasicMaterial({
+      color: 0xffffff,
+      transparent: true,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    }),
+  );
+  group.add(core);
+
+  const haloTex = makeRadialTexture([
+    [0.0, 'rgba(255, 255, 255, 0.95)'],
+    [0.25, 'rgba(217, 70, 239, 0.55)'],
+    [0.55, 'rgba(103, 232, 249, 0.30)'],
+    [1.0, 'rgba(103, 232, 249, 0.0)'],
+  ]);
+  const halo = new THREE.Sprite(
+    new THREE.SpriteMaterial({
+      map: haloTex,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      transparent: true,
+    }),
+  );
+  halo.scale.set(0.55, 0.55, 1);
+  group.add(halo);
+
+  group.position.set(x, 0, 0);
+  return { group, core, halo, haloTex };
+}
 
 // MARK: - Component
 
@@ -150,66 +217,147 @@ export function Orb({ playerRef, isActive }: OrbProps) {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    const gl = canvas.getContext('webgl');
-    if (!gl) {
-      console.error('[Orb] WebGL not available');
-      return;
-    }
+    // MARK: Renderer
+    const renderer = new THREE.WebGLRenderer({
+      canvas,
+      antialias: true,
+      alpha: true,
+      premultipliedAlpha: false,
+    });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.toneMapping = THREE.NoToneMapping;
+    renderer.setClearColor(0x000000, 0);
 
-    // MARK: Compile shaders
-    const compile = (type: number, src: string): WebGLShader | null => {
-      const shader = gl.createShader(type);
-      if (!shader) return null;
-      gl.shaderSource(shader, src);
-      gl.compileShader(shader);
-      if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
-        console.error('[Orb] Shader error:', gl.getShaderInfoLog(shader));
-        gl.deleteShader(shader);
-        return null;
-      }
-      return shader;
+    // MARK: Scene + camera
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(35, 1, 0.1, 100);
+    camera.position.set(0, 0, 4.0);
+    camera.lookAt(0, 0, 0);
+
+    // MARK: Layer 1 — background cyan radial bloom
+    const bgTex = makeRadialTexture([
+      [0.0, 'rgba(6, 182, 212, 0.18)'],
+      [0.5, 'rgba(6, 182, 212, 0.06)'],
+      [1.0, 'rgba(0, 0, 0, 0.0)'],
+    ]);
+    const bg = new THREE.Sprite(
+      new THREE.SpriteMaterial({
+        map: bgTex,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        depthTest: false,
+        transparent: true,
+      }),
+    );
+    bg.scale.set(6.0, 6.0, 1);
+    bg.position.z = -1.2;
+    bg.renderOrder = 0;
+    scene.add(bg);
+
+    // MARK: Layer 2 — outer halo (breathing at ~0.3 Hz)
+    const haloTex = makeRadialTexture([
+      [0.0, 'rgba(103, 232, 249, 0.50)'],
+      [0.3, 'rgba(8, 145, 178, 0.25)'],
+      [1.0, 'rgba(8, 145, 178, 0.0)'],
+    ]);
+    const haloMat = new THREE.SpriteMaterial({
+      map: haloTex,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      transparent: true,
+      opacity: 0.5,
+    });
+    const halo = new THREE.Sprite(haloMat);
+    halo.scale.set(3.4, 3.4, 1);
+    halo.renderOrder = 1;
+    scene.add(halo);
+
+    // MARK: Layer 3 — glass shell (custom fresnel shader)
+    const shellUniforms = {
+      u_amp: { value: 0 },
+      u_active: { value: 0 },
     };
+    const shellMat = new THREE.ShaderMaterial({
+      uniforms: shellUniforms,
+      vertexShader: SHELL_VERTEX,
+      fragmentShader: SHELL_FRAGMENT,
+      transparent: true,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      side: THREE.FrontSide,
+    });
+    const shell = new THREE.Mesh(new THREE.SphereGeometry(1.0, 96, 96), shellMat);
+    shell.renderOrder = 3;
+    scene.add(shell);
 
-    const vs = compile(gl.VERTEX_SHADER, VERTEX_SHADER);
-    const fs = compile(gl.FRAGMENT_SHADER, FRAGMENT_SHADER);
-    if (!vs || !fs) return;
+    // MARK: Layer 4 — inner plasma core
+    const plasmaUniforms = {
+      u_time: { value: 0 },
+      u_amp: { value: 0 },
+    };
+    const plasmaMat = new THREE.ShaderMaterial({
+      uniforms: plasmaUniforms,
+      vertexShader: PLASMA_VERTEX,
+      fragmentShader: PLASMA_FRAGMENT,
+      transparent: true,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    });
+    const plasma = new THREE.Mesh(new THREE.IcosahedronGeometry(0.55, 6), plasmaMat);
+    plasma.renderOrder = 2;
+    scene.add(plasma);
 
-    const program = gl.createProgram();
-    if (!program) return;
-    gl.attachShader(program, vs);
-    gl.attachShader(program, fs);
-    gl.linkProgram(program);
-    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
-      console.error('[Orb] Program link error:', gl.getProgramInfoLog(program));
-      return;
-    }
+    // MARK: Layer 5 — two equatorial nodes (left and right)
+    const nodeL = makeEquatorialNode(-1.02);
+    const nodeR = makeEquatorialNode(1.02);
+    nodeL.group.renderOrder = 5;
+    nodeR.group.renderOrder = 5;
+    scene.add(nodeL.group);
+    scene.add(nodeR.group);
 
-    // MARK: Fullscreen quad
-    const buffer = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
-    // prettier-ignore
-    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+    // MARK: Layer 6 — faint meridian bands (concentric inner-shell hint)
+    const bandMat = new THREE.MeshBasicMaterial({
+      color: 0x67e8f9,
+      transparent: true,
+      opacity: 0.10,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    });
+    const bands: THREE.Mesh[] = [];
+    [
+      { rx: 0.0, ry: 0.0 },
+      { rx: Math.PI / 5, ry: 0.0 },
+      { rx: 0.0, ry: Math.PI / 5 },
+    ].forEach(({ rx, ry }) => {
+      const ring = new THREE.Mesh(new THREE.TorusGeometry(1.05, 0.004, 8, 160), bandMat);
+      ring.rotation.x = rx;
+      ring.rotation.y = ry;
+      ring.renderOrder = 4;
+      scene.add(ring);
+      bands.push(ring);
+    });
 
-    const aPos = gl.getAttribLocation(program, 'a_position');
-    const uTime = gl.getUniformLocation(program, 'u_time');
-    const uEnergy = gl.getUniformLocation(program, 'u_energy');
-    const uActive = gl.getUniformLocation(program, 'u_active');
-    const uRes = gl.getUniformLocation(program, 'u_resolution');
-
-    gl.useProgram(program);
-    gl.enableVertexAttribArray(aPos);
-    gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+    // MARK: Postprocessing — selective bloom on bright pixels
+    const composer = new EffectComposer(renderer);
+    composer.addPass(new RenderPass(scene, camera));
+    const bloomPass = new UnrealBloomPass(
+      new THREE.Vector2(canvas.clientWidth, canvas.clientHeight),
+      0.55, // strength
+      0.50, // radius
+      0.55, // threshold — nodes / shell rim bloom, plasma body doesn't
+    );
+    composer.addPass(bloomPass);
 
     // MARK: Resize
     const resize = () => {
-      const dpr = window.devicePixelRatio || 1;
-      const w = Math.max(1, Math.floor(canvas.clientWidth * dpr));
-      const h = Math.max(1, Math.floor(canvas.clientHeight * dpr));
-      if (canvas.width !== w || canvas.height !== h) {
-        canvas.width = w;
-        canvas.height = h;
-        gl.viewport(0, 0, w, h);
-      }
+      const w = Math.max(1, canvas.clientWidth);
+      const h = Math.max(1, canvas.clientHeight);
+      renderer.setSize(w, h, false);
+      composer.setSize(w, h);
+      bloomPass.setSize(w, h);
+      camera.aspect = w / h;
+      camera.updateProjectionMatrix();
     };
     const ro = new ResizeObserver(resize);
     ro.observe(canvas);
@@ -219,34 +367,57 @@ export function Orb({ playerRef, isActive }: OrbProps) {
     const start = performance.now();
     const fftBins = 64;
     const dataArray = new Uint8Array(fftBins);
-    let smoothEnergy = 0;
+    let smoothAmp = 0;
     let smoothActive = 0;
     let raf = 0;
 
     const tick = () => {
       const t = (performance.now() - start) / 1000;
 
-      // Read instantaneous audio energy
-      let rawEnergy = 0;
+      // Audio amplitude (0..1 voice activity)
+      let rawAmp = 0;
       const player = playerRef.current;
       if (player && !player.isStopped) {
         const analyser = player.getAnalyser();
         analyser.getByteFrequencyData(dataArray);
         let sum = 0;
         for (let i = 0; i < fftBins; i++) sum += dataArray[i];
-        rawEnergy = sum / (fftBins * 255);
+        rawAmp = sum / (fftBins * 255);
       }
-
-      smoothEnergy += (rawEnergy - smoothEnergy) * 0.20;
+      smoothAmp += (rawAmp - smoothAmp) * 0.20;
       smoothActive += ((isActiveRef.current ? 1 : 0) - smoothActive) * 0.05;
 
-      gl.uniform1f(uTime, t);
-      gl.uniform1f(uEnergy, smoothEnergy);
-      gl.uniform1f(uActive, smoothActive);
-      gl.uniform2f(uRes, canvas.width, canvas.height);
+      // Layer 2 — halo: 0.3 Hz idle breathing + active bump + amp lift
+      const breath = 0.5 + 0.5 * Math.sin(t * Math.PI * 2.0 * 0.3);
+      haloMat.opacity = 0.20 + breath * 0.18 + smoothActive * 0.30 + smoothAmp * 0.30;
 
-      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+      // Layer 3 — shell: amp + active boost the rim
+      shellUniforms.u_amp.value = smoothAmp;
+      shellUniforms.u_active.value = smoothActive;
 
+      // Layer 4 — plasma: noise evolves on its own; amp drives displacement
+      plasmaUniforms.u_time.value = t;
+      plasmaUniforms.u_amp.value = smoothAmp;
+      plasma.rotation.y = -t * 0.10;
+      plasma.rotation.x = Math.sin(t * 0.13) * 0.20;
+
+      // Layer 5 — nodes: idle pulse at 1 Hz when listening, amp drives during speech
+      const nodePulse = 0.5 + 0.5 * Math.sin(t * Math.PI * 2.0 * 1.0);
+      const nodeBright =
+        0.35 + smoothActive * 0.30 * nodePulse + smoothAmp * 0.55;
+      const nodeHaloScale = 0.55 + smoothAmp * 0.25 + smoothActive * 0.10 * nodePulse;
+      [nodeL, nodeR].forEach((n) => {
+        (n.core.material as THREE.MeshBasicMaterial).opacity = Math.min(nodeBright, 1.0);
+        n.halo.material.opacity = Math.min(nodeBright * 0.8, 1.0);
+        n.halo.scale.set(nodeHaloScale, nodeHaloScale, 1);
+      });
+
+      // Layer 6 — bands: very slow drift to imply concentric inner shells
+      bands[0].rotation.z = t * 0.05;
+      bands[1].rotation.z = -t * 0.04;
+      bands[2].rotation.z = t * 0.03;
+
+      composer.render();
       raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
@@ -254,10 +425,24 @@ export function Orb({ playerRef, isActive }: OrbProps) {
     return () => {
       cancelAnimationFrame(raf);
       ro.disconnect();
-      gl.deleteProgram(program);
-      gl.deleteShader(vs);
-      gl.deleteShader(fs);
-      gl.deleteBuffer(buffer);
+      shell.geometry.dispose();
+      shellMat.dispose();
+      plasma.geometry.dispose();
+      plasmaMat.dispose();
+      bands.forEach((b) => b.geometry.dispose());
+      bandMat.dispose();
+      [nodeL, nodeR].forEach((n) => {
+        n.core.geometry.dispose();
+        (n.core.material as THREE.MeshBasicMaterial).dispose();
+        (n.halo.material as THREE.SpriteMaterial).dispose();
+        n.haloTex.dispose();
+      });
+      bgTex.dispose();
+      (bg.material as THREE.SpriteMaterial).dispose();
+      haloTex.dispose();
+      haloMat.dispose();
+      composer.dispose();
+      renderer.dispose();
     };
   }, [playerRef]);
 
