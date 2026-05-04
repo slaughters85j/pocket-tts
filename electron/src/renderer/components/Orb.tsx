@@ -203,118 +203,96 @@ totalEmissiveRadiance += accent * fres * 0.40;`,
       u_amp: { value: 0 },
     };
 
+    // MARK: Inner orb. Direct port of the gemini "Slo-Mo AI Fractal Orb"
+    // raymarcher: a screen-aligned plane runs a ray from a fixed local-space
+    // eye point, marching the union of an orb SDF (chained-sine fractal noise
+    // subtracted from a sphere) and a horizontal "beam" SDF that creates the
+    // lateral intersection points extending left and right from the orb. A
+    // small white-emission baseline keeps those lateral intersections visible
+    // even when there's no audio.
     const PLASMA_VERT = `
-varying vec3 vWorldPosition;
+varying vec3 vPosition;
 void main() {
-  vWorldPosition = (modelMatrix * vec4(position, 1.0)).xyz;
-  gl_Position = projectionMatrix * viewMatrix * vec4(vWorldPosition, 1.0);
+  vPosition = position;
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
 }
 `;
 
     const PLASMA_FRAG = `
 uniform float u_time;
 uniform float u_amp;
-varying vec3 vWorldPosition;
+varying vec3 vPosition;
 
+mat3 rotX(float a) { float c = cos(a); float s = sin(a); return mat3(1.0, 0.0, 0.0, 0.0, c, -s, 0.0, s, c); }
 mat3 rotY(float a) { float c = cos(a); float s = sin(a); return mat3(c, 0.0, s, 0.0, 1.0, 0.0, -s, 0.0, c); }
 
-const vec3 GRAD0  = vec3(0.878, 0.996, 1.000);
-const vec3 GRAD1  = vec3(0.741, 0.808, 0.875);
-const vec3 GRAD2  = vec3(0.600, 0.620, 0.749);
-const vec3 GRAD3  = vec3(0.463, 0.431, 0.624);
-const vec3 GRAD4  = vec3(0.400, 0.353, 0.549);
-const vec3 GRAD5  = vec3(0.341, 0.275, 0.471);
-const vec3 GRAD6  = vec3(0.278, 0.192, 0.396);
-const vec3 GRAD7  = vec3(0.216, 0.114, 0.318);
-const vec3 GRAD8  = vec3(0.278, 0.125, 0.361);
-const vec3 GRAD9  = vec3(0.337, 0.141, 0.408);
-const vec3 GRAD10 = vec3(0.400, 0.153, 0.451);
-const vec3 GRAD11 = vec3(0.537, 0.294, 0.584);
-const vec3 GRAD12 = vec3(0.678, 0.435, 0.718);
-const vec3 GRAD13 = vec3(0.816, 0.573, 0.851);
-const vec3 GRAD14 = vec3(0.953, 0.714, 0.984);
-
-vec3 gradient15(float t) {
-  t = clamp(t, 0.0, 0.9999) * 14.0;
-  float f = fract(t);
-  if (t < 1.0)  return mix(GRAD0,  GRAD1,  f);
-  if (t < 2.0)  return mix(GRAD1,  GRAD2,  f);
-  if (t < 3.0)  return mix(GRAD2,  GRAD3,  f);
-  if (t < 4.0)  return mix(GRAD3,  GRAD4,  f);
-  if (t < 5.0)  return mix(GRAD4,  GRAD5,  f);
-  if (t < 6.0)  return mix(GRAD5,  GRAD6,  f);
-  if (t < 7.0)  return mix(GRAD6,  GRAD7,  f);
-  if (t < 8.0)  return mix(GRAD7,  GRAD8,  f);
-  if (t < 9.0)  return mix(GRAD8,  GRAD9,  f);
-  if (t < 10.0) return mix(GRAD9,  GRAD10, f);
-  if (t < 11.0) return mix(GRAD10, GRAD11, f);
-  if (t < 12.0) return mix(GRAD11, GRAD12, f);
-  if (t < 13.0) return mix(GRAD12, GRAD13, f);
-  return mix(GRAD13, GRAD14, f);
+// Horizontal beam SDF. Tube along X (length(p.yz)) with chained-sine noise on
+// horizontally-stretched coordinates so the noise reads as long lateral veins
+// extending out from the central orb. Subtracting the noise widens the tube
+// non-uniformly along its length.
+float getBeam(vec3 p) {
+  float beamSDF = length(p.yz) - 0.08;
+  vec3 q = p * vec3(0.4, 2.0, 1.0) + (u_time * 0.1);
+  float noise = 0.0;
+  float amp = 0.5;
+  for (int i = 0; i < 5; i++) {
+    noise += amp * abs(sin(q.x + sin(q.y + sin(q.z))));
+    q *= 1.8;
+    amp *= 0.5;
+  }
+  return beamSDF - noise * 0.08;
 }
 
-// Stretched ellipsoid SDF with iterative chained-sine noise subtracted.
-// Anisotropic scale produces the gravity-well silhouette. Twist applies
-// frame-dragging style rotation at depth-dependent angle.
-float sdfMap(vec3 p) {
-  float baseR = length(p / vec3(1.05, 0.62, 0.62)) - 0.85;
+// Combined orb + horizontal beam. Orb is sphere(1.1) with chained-sine fractal
+// noise subtracted (slow rotY twist on the sample coords). Union with the beam
+// produces the lateral intersection structure extending left and right.
+float mapField(vec3 p) {
+  float res = length(p) - 1.1;
 
-  float slowT = u_time * 0.10;
-  float twist = sin(length(p) * 1.8 - slowT);
-  vec3 q = rotY(twist * 0.5) * p * 1.15;
-
+  vec3 q = p * 1.2 + (u_time * 0.1);
   float f = 0.0;
-  float amp = 0.5;
+  float amp = 0.5 + (u_amp * 0.4);
   for (int i = 0; i < 6; i++) {
-    q = rotY(slowT * 0.05) * q + slowT * 0.08;
+    q = rotY(u_time * 0.02) * q;
     f += amp * abs(sin(q.x + sin(q.y + sin(q.z))));
     q *= 1.7;
     amp *= 0.5;
   }
-  return baseR - f * (0.25 + u_amp * 0.20);
+  float orb = res - f * (0.3 + u_amp * 0.2);
+
+  return min(orb, getBeam(p));
 }
 
 void main() {
-  vec3 ro = cameraPosition;
-  vec3 rd = normalize(vWorldPosition - ro);
+  // Screen-space raymarch: eye at +Z, rays into -Z through the plane's local
+  // position. Plane is treated as the screen.
+  vec3 ro = vec3(0.0, 0.0, 3.0);
+  vec3 rd = normalize(vec3(vPosition.xy, -1.8));
 
   float t = 0.0;
   vec3 col = vec3(0.0);
 
-  for (int i = 0; i < 60; i++) {
-    vec3 p = vWorldPosition + rd * t;
-    if (length(p) > 1.65) break;
-    if (t > 4.0) break;
+  for (int i = 0; i < 50; i++) {
+    vec3 p = ro + rd * t;
+    float d = mapField(p);
+    if (t > 5.0) break;
 
-    float d = sdfMap(p);
+    // Cloud-edge soft glow accumulator: bright where the SDF is near zero.
     float glow = 0.015 / (0.015 + abs(d));
 
-    // Drive 15-stop gradient by radial bias + slow spatial sine. Radial bias
-    // pulls dark mid-gradient colors toward the singularity center, lighter
-    // ends toward the outside.
-    float radialBias = clamp(length(p) / 1.4, 0.0, 1.0);
-    float colorPhase = sin(p.x * 1.5 + p.y * 1.0 + p.z * 1.2 + u_time * 0.08);
-    float gradT = clamp(colorPhase * 0.30 + (1.0 - radialBias) * 0.50 + 0.10, 0.0, 1.0);
-    vec3 baseColor = gradient15(gradT);
+    vec3 purple = vec3(0.7, 0.0, 1.0) * glow;
+    vec3 cyan   = vec3(0.2, 0.8, 1.0) * pow(glow, 2.5);
+    // Hot white core — the lateral intersection hotspots. Small baseline so
+    // the intersection points stay visible at idle, then audio energy lifts.
+    vec3 white  = vec3(1.0) * pow(glow, 10.0) * (0.20 + u_amp * 0.80);
 
-    // Layered color powers: broad halo at glow^1, mid shell at glow^2.5,
-    // hot core at glow^10. Audio amplitude lifts the hot core during speech.
-    vec3 broadCol = baseColor * glow;
-    vec3 medCol   = baseColor * pow(glow, 2.5);
-    vec3 hotCol   = vec3(1.0, 0.96, 1.0) * pow(glow, 10.0) * (0.5 + u_amp * 0.6);
-    col += broadCol * 0.10 + medCol * 0.13 + hotCol * 0.08;
-
-    // Equatorial electric-blue spike: bright cyan halo and white-blue core
-    // right at y=0, large |x|. Same physics as before but evaluated per
-    // raymarch sample so the bloom catches it even through the volume.
-    float xNorm = abs(p.x) / 0.95;
-    float yProx = exp(-p.y * p.y * 35.0);
-    float spike = smoothstep(0.78, 1.05, xNorm) * yProx;
-    vec3 spikeColor = mix(vec3(0.30, 1.40, 2.60), vec3(1.50, 2.20, 3.00), smoothstep(0.92, 1.05, xNorm));
-    col += spikeColor * spike * pow(glow, 1.6) * (0.4 + u_amp * 0.4);
-
-    t += max(abs(d) * 0.55, 0.015);
+    col += (purple * 0.12) + (cyan * 0.15) + (white * 0.10);
+    t += max(abs(d) * 0.5, 0.02);
   }
+
+  // Plane corners fade to black so the rectangular boundary is invisible.
+  float dist = length(vPosition.xy);
+  col *= smoothstep(1.5, 0.8, dist);
 
   gl_FragColor = vec4(col, 1.0);
 }
@@ -328,10 +306,10 @@ void main() {
       blending: THREE.AdditiveBlending,
       depthWrite: false,
     });
-    // Box bounds. Camera enters through the front face; raymarcher walks
-    // forward from there. Sized comfortably larger than the SDF volume so
-    // edge clipping never crops the cloudy silhouette.
-    const plasmaGeom = new THREE.BoxGeometry(2.6, 2.0, 2.0);
+    // Screen-aligned 5×5 plane. Camera sits at +Z; the plane defaults to facing
+    // +Z, so no rotation needed. Smoothstep vignette in the shader hides the
+    // rectangular silhouette inside the visible viewport.
+    const plasmaGeom = new THREE.PlaneGeometry(5, 5);
     const plasma = new THREE.Mesh(plasmaGeom, plasmaMat);
     plasma.renderOrder = -1;
     scene.add(plasma);
