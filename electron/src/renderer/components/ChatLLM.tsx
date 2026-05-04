@@ -1,6 +1,7 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { VoiceSelector, SavedVoice } from './VoiceSelector';
 import { StreamingWavPlayer } from '../lib/streaming-wav-player';
+import { Orb } from './Orb';
 
 interface ChatMessage {
   role: 'user' | 'assistant';
@@ -13,6 +14,9 @@ interface ChatLLMProps {
 }
 
 type ConnectionStatus = 'checking' | 'connected' | 'disconnected';
+type ViewMode = 'orb' | 'chat';
+
+const VIEW_MODE_STORAGE_KEY = 'chatllm-view-mode';
 
 export function ChatLLM({ savedVoices, onDeleteSavedVoice }: ChatLLMProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -23,6 +27,15 @@ export function ChatLLM({ savedVoices, onDeleteSavedVoice }: ChatLLMProps) {
   const [connectedModel, setConnectedModel] = useState<string | null>(null);
   const [currentAssistantText, setCurrentAssistantText] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [viewMode, setViewMode] = useState<ViewMode>(() => {
+    if (typeof window === 'undefined') return 'orb';
+    const saved = window.localStorage.getItem(VIEW_MODE_STORAGE_KEY);
+    return saved === 'chat' ? 'chat' : 'orb';
+  });
+
+  useEffect(() => {
+    window.localStorage.setItem(VIEW_MODE_STORAGE_KEY, viewMode);
+  }, [viewMode]);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -264,57 +277,86 @@ export function ChatLLM({ savedVoices, onDeleteSavedVoice }: ChatLLMProps) {
 
         {/* Right Column: Chat Area */}
         <div className="flex-1 flex flex-col min-w-0 pb-6">
-          <div className="bg-bg-secondary rounded-lg flex flex-col flex-1 overflow-hidden">
-            {/* Messages Area */}
-            <div className="flex-1 overflow-y-auto p-4 space-y-4">
-              {messages.length === 0 && !currentAssistantText && (
-                <div className="flex items-center justify-center h-full text-text-secondary text-sm">
-                  <p>Send a message to start chatting. Responses will be spoken aloud.</p>
-                </div>
+          <div className="bg-bg-secondary rounded-lg flex flex-col flex-1 overflow-hidden relative">
+            {/* View toggle: floating top-right */}
+            <button
+              onClick={() => setViewMode((m) => (m === 'orb' ? 'chat' : 'orb'))}
+              className="absolute top-3 right-3 z-10 p-2 rounded-md bg-bg-primary/40 hover:bg-bg-primary/70
+                text-text-secondary hover:text-text-primary backdrop-blur-sm transition-colors"
+              title={viewMode === 'orb' ? 'Show chat transcript' : 'Show orb visualization'}
+            >
+              {viewMode === 'orb' ? (
+                // List icon → switch to chat transcript
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                  <line x1="3" y1="4" x2="13" y2="4" />
+                  <line x1="3" y1="8" x2="13" y2="8" />
+                  <line x1="3" y1="12" x2="13" y2="12" />
+                </svg>
+              ) : (
+                // Orb icon → switch to orb view
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+                  <circle cx="8" cy="8" r="5" />
+                  <circle cx="8" cy="8" r="2" fill="currentColor" stroke="none" />
+                </svg>
               )}
+            </button>
 
-              {messages.map((msg, i) => (
-                <div
-                  key={i}
-                  className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
-                >
+            {/* Content: orb OR transcript */}
+            {viewMode === 'orb' ? (
+              <div className="flex-1 min-h-0 bg-black">
+                <Orb playerRef={playerRef} isActive={isStreaming} />
+              </div>
+            ) : (
+              <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                {messages.length === 0 && !currentAssistantText && (
+                  <div className="flex items-center justify-center h-full text-text-secondary text-sm">
+                    <p>Send a message to start chatting. Responses will be spoken aloud.</p>
+                  </div>
+                )}
+
+                {messages.map((msg, i) => (
                   <div
-                    className={`max-w-[80%] rounded-lg px-4 py-3 text-sm ${
-                      msg.role === 'user'
-                        ? 'bg-accent/20 text-text-primary'
-                        : 'bg-bg-tertiary text-text-primary'
-                    }`}
+                    key={i}
+                    className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
                   >
-                    <p className="whitespace-pre-wrap">{msg.content}</p>
+                    <div
+                      className={`max-w-[80%] rounded-lg px-4 py-3 text-sm ${
+                        msg.role === 'user'
+                          ? 'bg-accent/20 text-text-primary'
+                          : 'bg-bg-tertiary text-text-primary'
+                      }`}
+                    >
+                      <p className="whitespace-pre-wrap">{msg.content}</p>
+                    </div>
                   </div>
-                </div>
-              ))}
+                ))}
 
-              {/* Streaming assistant message */}
-              {currentAssistantText && (
-                <div className="flex justify-start">
-                  <div className="max-w-[80%] rounded-lg px-4 py-3 text-sm bg-bg-tertiary text-text-primary">
-                    <p className="whitespace-pre-wrap">
-                      {currentAssistantText}
-                      <span className="inline-block w-2 h-4 bg-accent/60 animate-pulse ml-0.5 align-text-bottom" />
-                    </p>
+                {/* Streaming assistant message */}
+                {currentAssistantText && (
+                  <div className="flex justify-start">
+                    <div className="max-w-[80%] rounded-lg px-4 py-3 text-sm bg-bg-tertiary text-text-primary">
+                      <p className="whitespace-pre-wrap">
+                        {currentAssistantText}
+                        <span className="inline-block w-2 h-4 bg-accent/60 animate-pulse ml-0.5 align-text-bottom" />
+                      </p>
+                    </div>
                   </div>
+                )}
+
+                <div ref={messagesEndRef} />
+              </div>
+            )}
+
+            {/* Error banner — visible in both modes */}
+            {error && (
+              <div className="px-4 pt-3">
+                <div className="bg-red-500/10 border border-red-500/30 rounded-lg px-4 py-2 text-sm text-red-400">
+                  {error}
                 </div>
-              )}
+              </div>
+            )}
 
-              {/* Error display */}
-              {error && (
-                <div className="flex justify-center">
-                  <div className="bg-red-500/10 border border-red-500/30 rounded-lg px-4 py-2 text-sm text-red-400">
-                    {error}
-                  </div>
-                </div>
-              )}
-
-              <div ref={messagesEndRef} />
-            </div>
-
-            {/* Input Bar */}
+            {/* Input Bar — visible in both modes */}
             <div className="border-t border-border-color p-4">
               <div className="flex gap-3 items-end">
                 <textarea
