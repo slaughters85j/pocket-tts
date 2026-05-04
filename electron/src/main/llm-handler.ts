@@ -72,7 +72,8 @@ export function registerChatHandlers(
     }
   });
 
-  // Send message — streams LLM response for live text, then sends full text to TTS in one shot
+  // Send message — streams LLM tokens to the renderer AND pipelines sentence-by-sentence
+  // TTS so audio playback starts as soon as the first sentence is ready.
   ipcMain.handle('chat:send-message', async (event: IpcMainInvokeEvent, params: ChatSendParams) => {
     const { messages, voiceUrl, savedVoiceId } = params;
     const sender = event.sender;
@@ -97,10 +98,134 @@ export function registerChatHandlers(
       voiceWavPath = voiceManager.getVoiceFilePath(savedVoiceId);
     }
 
-    let fullResponseText = '';
+    // --- Sentence-streamed TTS pipeline -----------------------------------------------
+    // The TTS server is single-flight (not thread-safe, batch=1), so we serialize
+    // sentence requests through a single chained Promise. The first sentence's WAV
+    // header passes through to the renderer; sentence 2+ have their 44-byte header
+    // stripped so the renderer's StreamingWavPlayer keeps treating it as one stream.
+
+    let textBuffer = '';
+    const ttsQueue: string[] = [];
+    let queuePromise: Promise<void> = Promise.resolve();
+    let wavHeaderSent = false;
+    let firstAudioLogged = false;
+    let totalSentencesSent = 0;
+    const overallStartTime = performance.now();
+
+    const extractNextSentence = (): string | null => {
+      // Sentence-ending punctuation followed by whitespace, after at least 20 chars
+      // (avoids splitting on abbreviations like "Dr." or "e.g.").
+      const MIN_LEN = 20;
+      for (let i = MIN_LEN; i < textBuffer.length - 1; i++) {
+        const ch = textBuffer[i];
+        if ((ch === '.' || ch === '!' || ch === '?') && /\s/.test(textBuffer[i + 1])) {
+          const sentence = textBuffer.slice(0, i + 1).trim();
+          textBuffer = textBuffer.slice(i + 1).replace(/^\s+/, '');
+          return sentence || null;
+        }
+      }
+      // Fallback: hard newline past min length (paragraph / list-item break).
+      const nl = textBuffer.indexOf('\n');
+      if (nl >= MIN_LEN) {
+        const sentence = textBuffer.slice(0, nl).trim();
+        textBuffer = textBuffer.slice(nl + 1).replace(/^\s+/, '');
+        return sentence || null;
+      }
+      return null;
+    };
+
+    const streamSentenceTTS = async (text: string): Promise<void> => {
+      if (abortController.signal.aborted) return;
+
+      const ttsAbort = new AbortController();
+      currentTTSAbort = ttsAbort;
+      const onParentAbort = () => ttsAbort.abort();
+      abortController.signal.addEventListener('abort', onParentAbort);
+
+      const sentenceStart = performance.now();
+      const sentenceIdx = ++totalSentencesSent;
+
+      try {
+        const formData = new FormData();
+        formData.append('text', text);
+        if (voiceWavPath && fs.existsSync(voiceWavPath)) {
+          const buf = fs.readFileSync(voiceWavPath);
+          formData.append('voice_wav', new Blob([buf], { type: 'audio/wav' }), 'voice.wav');
+        } else {
+          formData.append('voice_url', resolvedVoiceUrl);
+        }
+
+        const ttsResponse = await fetch(`http://127.0.0.1:${LAUNCH_AGENT_TTS_PORT}/tts`, {
+          method: 'POST',
+          body: formData,
+          signal: ttsAbort.signal,
+        });
+
+        if (!ttsResponse.ok) {
+          const errText = await ttsResponse.text();
+          throw new Error(`TTS server error: ${ttsResponse.status} - ${errText}`);
+        }
+
+        const reader = ttsResponse.body?.getReader();
+        if (!reader) throw new Error('No TTS response body');
+
+        const skipHeader = wavHeaderSent;
+        let bytesFromSentence = 0;
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (!value || sender.isDestroyed()) continue;
+
+          let chunk: Uint8Array = value;
+          // Strip 44-byte WAV header for sentence 2+ so the renderer sees one continuous PCM stream
+          if (skipHeader && bytesFromSentence < 44) {
+            const toSkip = 44 - bytesFromSentence;
+            bytesFromSentence += value.length;
+            if (value.length <= toSkip) continue;
+            chunk = value.slice(toSkip);
+          } else {
+            bytesFromSentence += value.length;
+          }
+          if (chunk.length === 0) continue;
+
+          sender.send('chat:tts-chunk', chunk.slice().buffer);
+          wavHeaderSent = true;
+
+          if (!firstAudioLogged) {
+            const ttfa = ((performance.now() - overallStartTime) / 1000).toFixed(2);
+            console.log(`${LOG_PREFIX} First audio chunk — TTFA: ${ttfa}s`);
+            firstAudioLogged = true;
+          }
+        }
+
+        const dur = ((performance.now() - sentenceStart) / 1000).toFixed(2);
+        console.log(`${LOG_PREFIX} Sentence ${sentenceIdx} done (${text.length} chars in ${dur}s)`);
+      } finally {
+        abortController.signal.removeEventListener('abort', onParentAbort);
+        if (currentTTSAbort === ttsAbort) currentTTSAbort = null;
+      }
+    };
+
+    const drainQueue = async (): Promise<void> => {
+      while (ttsQueue.length > 0 && !abortController.signal.aborted) {
+        const s = ttsQueue.shift();
+        if (s) await streamSentenceTTS(s);
+      }
+    };
+
+    const enqueueSentence = (s: string): void => {
+      const trimmed = s.trim();
+      if (!trimmed) return;
+      ttsQueue.push(trimmed);
+      queuePromise = queuePromise.then(drainQueue).catch((err) => {
+        console.error(`${LOG_PREFIX} TTS queue error:`, err instanceof Error ? err.message : err);
+      });
+    };
 
     try {
-      // --- Phase 1: Stream LLM response (tokens sent to renderer for live display) ---
+      // --- Stream LLM response: tokens go to renderer immediately, completed
+      // sentences get enqueued for TTS in parallel ---
 
       const response = await fetch(LM_STUDIO_CHAT, {
         method: 'POST',
@@ -118,7 +243,7 @@ export function registerChatHandlers(
         throw new Error(`LM Studio error: ${response.status} - ${errorText}`);
       }
 
-      console.log(`${LOG_PREFIX} LLM stream started`);
+      console.log(`${LOG_PREFIX} LLM stream started — voice: ${voiceWavPath ? `saved ${voiceWavPath}` : resolvedVoiceUrl}`);
       const llmStartTime = performance.now();
 
       const reader = response.body?.getReader();
@@ -126,6 +251,7 @@ export function registerChatHandlers(
 
       const decoder = new TextDecoder();
       let sseBuffer = '';
+      let totalLLMChars = 0;
 
       while (true) {
         const { done, value } = await reader.read();
@@ -152,7 +278,14 @@ export function registerChatHandlers(
               if (!sender.isDestroyed()) {
                 sender.send('chat:llm-chunk', content);
               }
-              fullResponseText += content;
+              textBuffer += content;
+              totalLLMChars += content.length;
+
+              // Flush any complete sentences into the TTS queue
+              let sentence: string | null;
+              while ((sentence = extractNextSentence()) !== null) {
+                enqueueSentence(sentence);
+              }
             }
           } catch {
             // Skip malformed JSON chunks
@@ -161,9 +294,15 @@ export function registerChatHandlers(
       }
 
       const llmDuration = ((performance.now() - llmStartTime) / 1000).toFixed(2);
-      console.log(`${LOG_PREFIX} LLM stream complete — ${fullResponseText.length} chars in ${llmDuration}s`);
+      console.log(`${LOG_PREFIX} LLM stream complete — ${totalLLMChars} chars in ${llmDuration}s`);
 
-      if (!fullResponseText.trim()) {
+      // Flush remaining buffered text as the final sentence
+      if (textBuffer.trim()) {
+        enqueueSentence(textBuffer);
+        textBuffer = '';
+      }
+
+      if (totalSentencesSent === 0 && ttsQueue.length === 0) {
         console.log(`${LOG_PREFIX} Empty LLM response, skipping TTS`);
         if (!sender.isDestroyed()) {
           sender.send('chat:complete');
@@ -171,64 +310,11 @@ export function registerChatHandlers(
         return;
       }
 
-      // --- Phase 2: Send full response to TTS in one shot (like Quick Action) ---
+      // Wait for the TTS queue to fully drain before signaling completion
+      await queuePromise;
 
-      const ttsAbort = new AbortController();
-      currentTTSAbort = ttsAbort;
-
-      console.log(`${LOG_PREFIX} TTS starting — sending ${fullResponseText.length} chars to LaunchAgent :${LAUNCH_AGENT_TTS_PORT}`);
-      const ttsStartTime = performance.now();
-
-      const formData = new FormData();
-      formData.append('text', fullResponseText);
-
-      if (voiceWavPath && fs.existsSync(voiceWavPath)) {
-        const buffer = fs.readFileSync(voiceWavPath);
-        const blob = new Blob([buffer], { type: 'audio/wav' });
-        formData.append('voice_wav', blob, 'voice.wav');
-        console.log(`${LOG_PREFIX} Using saved voice: ${voiceWavPath}`);
-      } else {
-        formData.append('voice_url', resolvedVoiceUrl);
-        console.log(`${LOG_PREFIX} Using voice: ${resolvedVoiceUrl}`);
-      }
-
-      const ttsResponse = await fetch(`http://127.0.0.1:${LAUNCH_AGENT_TTS_PORT}/tts`, {
-        method: 'POST',
-        body: formData,
-        signal: ttsAbort.signal,
-      });
-
-      if (!ttsResponse.ok) {
-        const errorText = await ttsResponse.text();
-        throw new Error(`TTS server error: ${ttsResponse.status} - ${errorText}`);
-      }
-
-      const ttsReader = ttsResponse.body?.getReader();
-      if (!ttsReader) throw new Error('No TTS response body');
-
-      let ttsChunks = 0;
-      let ttsBytes = 0;
-      let firstChunkLogged = false;
-
-      while (true) {
-        const { done, value } = await ttsReader.read();
-        if (done) break;
-
-        if (value && !sender.isDestroyed()) {
-          sender.send('chat:tts-chunk', value.buffer);
-          ttsChunks++;
-          ttsBytes += value.length;
-
-          if (!firstChunkLogged) {
-            const ttfa = ((performance.now() - ttsStartTime) / 1000).toFixed(2);
-            console.log(`${LOG_PREFIX} TTS first chunk received — TTFA: ${ttfa}s`);
-            firstChunkLogged = true;
-          }
-        }
-      }
-
-      const ttsDuration = ((performance.now() - ttsStartTime) / 1000).toFixed(2);
-      console.log(`${LOG_PREFIX} TTS complete — ${ttsBytes} bytes in ${ttsChunks} chunks (${ttsDuration}s)`);
+      const totalDur = ((performance.now() - overallStartTime) / 1000).toFixed(2);
+      console.log(`${LOG_PREFIX} All TTS done — ${totalSentencesSent} sentences in ${totalDur}s`);
 
       if (!sender.isDestroyed()) {
         sender.send('chat:tts-sentence-complete');
