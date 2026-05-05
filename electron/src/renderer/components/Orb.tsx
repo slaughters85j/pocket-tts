@@ -117,16 +117,16 @@ export function Orb({ playerRef, isActive }: OrbProps) {
     };
     const ribbonMat = new THREE.MeshPhysicalMaterial({
       color: 0xffffff,
-      transmission: 1.0,
-      thickness: 0.05,
+      transmission: 0.0,
+      thickness: 0.0,
       roughness: 0.04,
       ior: 1.42,
       transparent: true,
       clearcoat: 1.0,
       clearcoatRoughness: 0.0,
       envMapIntensity: 1.0,
-      side: THREE.FrontSide,
-      depthWrite: true,
+      side: THREE.DoubleSide,
+      depthWrite: false,
     });
     ribbonMat.onBeforeCompile = (shader) => {
       shader.uniforms.u_time = ribbonUniforms.u_time;
@@ -143,7 +143,8 @@ varying vec3 vRibbonWorldPos;`,
         `#include <begin_vertex>
 float n_a = snoise(position * 1.2 + vec3(u_time * 0.30));
 float n_b = snoise(position * 2.5 - vec3(u_time * 0.21)) * 0.5;
-transformed += normal * (n_a + n_b) * (0.04 + u_amp * 0.06);
+vec3 radialDir = length(position.xy) > 0.0001 ? vec3(normalize(position.xy), 0.0) : vec3(0.0);
+transformed += radialDir * (n_a + n_b) * (0.08 + u_amp * 0.12);
 vRibbonWorldPos = (modelMatrix * vec4(transformed, 1.0)).xyz;`,
       );
       // Time-varying Fresnel accents. Three colors (electric blue, gold, rust)
@@ -176,20 +177,73 @@ totalEmissiveRadiance += accent * fres * 0.15;`,
       ).replace(
         '#include <dithering_fragment>',
         `#include <dithering_fragment>
-float edgeAlpha = pow(1.0 - max(dot(normalize(vNormal), normalize(vViewPosition)), 0.0), 3.5);
-gl_FragColor.a = mix(0.08, 1.0, edgeAlpha);`,
+float edgeAlpha = pow(1.0 - max(dot(normalize(vNormal), normalize(vViewPosition)), 0.0), 1.5);
+float liquidShimmer = snoise(vRibbonWorldPos * 1.8 + vec3(u_time * 0.25)) * 0.5 + 0.5;
+float bodyAlpha = mix(0.05, 0.18, liquidShimmer);
+gl_FragColor.a = mix(bodyAlpha, 0.40, edgeAlpha);
+vec3 iceBlue = vec3(0.55, 0.85, 1.10);
+gl_FragColor.rgb += iceBlue * edgeAlpha * 1.20;
+gl_FragColor.rgb += vec3(0.15, 0.10, 0.20) * liquidShimmer * 0.18;`,
       );
     };
     // Shared geometry, four instances at different orientations.
-    const ribbonGeom = new THREE.TorusGeometry(1.25, 0.2, 24, 200);
+    const ribbonGeom = new THREE.CircleGeometry(0.834, 200);
     const ribbon1 = new THREE.Mesh(ribbonGeom, ribbonMat);
     // const ribbon2 = new THREE.Mesh(ribbonGeom, ribbonMat);
     // const ribbon3 = new THREE.Mesh(ribbonGeom, ribbonMat);
     // const ribbon4 = new THREE.Mesh(ribbonGeom, ribbonMat);
     // ribbon1 — horizontal equator (flat torus, no rotation)
     ribbon1.rotation.set(0, 0, 0);
-    ribbon1.renderOrder = -2;
-    ribbon1.position.z = -1.5;
+    ribbon1.renderOrder = 2;
+    ribbon1.position.z = 0.5;
+    // Translucent ice-blue ring shader. Edge mask uses UV.y (RingGeometry maps
+    // UV.y across the radial direction) so the inner and outer rims glow while
+    // the body of the ring stays low-alpha for a glassy translucent reading.
+    const discMat = new THREE.ShaderMaterial({
+      uniforms: { u_time: { value: 0 } },
+      transparent: true,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      blending: THREE.NormalBlending,
+      vertexShader: `
+        varying vec2 vLocalPos;
+        void main() {
+          vLocalPos = position.xy;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: `
+        ${SIMPLEX_3D}
+        uniform float u_time;
+        varying vec2 vLocalPos;
+        void main() {
+          // Disc radius is 0.834. Compute normalized radial distance from center
+          // and warp the effective edge boundary with simplex noise driven by
+          // angle + time, so the rim ripples organically.
+          float DISC_R = 0.834;
+          float r = length(vLocalPos);
+          float theta = atan(vLocalPos.y, vLocalPos.x);
+          // Noise sampled along the rim's angular position. Two octaves at
+          // different frequencies and time speeds give an organic rippling edge.
+          float n_a = snoise(vec3(cos(theta) * 1.0, sin(theta) * 1.0, u_time * 0.165));
+          float n_b = snoise(vec3(cos(theta) * 2.0, sin(theta) * 2.0, u_time * 0.110)) * 0.35;
+          float warp = (n_a + n_b) * 0.05; // edge wobble amplitude in world units
+          float effectiveR = DISC_R + warp;
+          // Hard clip outside the warped boundary so the edge actually ripples
+          // in/out rather than just shifting color.
+          if (r > effectiveR) discard;
+          // Edge mask peaks at the warped boundary and falls off toward center.
+          float radial = clamp(r / effectiveR, 0.0, 1.0);
+          float edge = pow(radial, 33.0);
+          vec3 iceBlue = vec3(0.55, 0.85, 1.10);
+          vec3 bodyTint = vec3(0.30, 0.50, 0.85);
+          vec3 col = mix(bodyTint, iceBlue, edge);
+          float alpha = mix(0.02, 0.95, edge);
+          gl_FragColor = vec4(col, alpha);
+        }
+      `,
+    });
+    ribbon1.material = discMat as unknown as THREE.MeshPhysicalMaterial;
     // ribbon2 — VERTICAL ribbon. Torus rotated 90° about X reads as an upright
     // band crossing the orb top-to-bottom. (Upper red arrow in reference.)
     // ribbon2.rotation.set(0, 0, 0);
@@ -406,12 +460,13 @@ void main() {
       // Ribbon uniforms drive their wave deformation independently.
       ribbonUniforms.u_time.value = t;
       ribbonUniforms.u_amp.value = smoothAmp;
+      discMat.uniforms.u_time.value = t;
 
       // Slow orbital drift on each ribbon so they mutate into and out of each
       // other rather than holding fixed orientations. Different frequencies per
       // ribbon and per axis ensure they never settle into a repeating pattern.
-      ribbon1.rotation.x = Math.sin(t * 0.07) * 0.35;
-      ribbon1.rotation.z = t * 0.03 + Math.cos(t * 0.11) * 0.20;
+      // ribbon1.rotation.x = Math.sin(t * 0.07) * 0.35;
+      // ribbon1.rotation.z = t * 0.03 + Math.cos(t * 0.11) * 0.20;
       // ribbon2.rotation.x = Math.PI / 2 + Math.sin(t * 0.09) * 0.40;
       // ribbon2.rotation.y = Math.cos(t * 0.06) * 0.25;
       // ribbon3.rotation.x — set ribbon3's X-axis rotation in radians, every frame.
