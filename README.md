@@ -18,6 +18,7 @@ A macOS-native fork of [Kyutai's Pocket TTS](https://github.com/kyutai-labs/pock
 | **Text Normalizer** | Numbers, currencies, abbreviations, acronyms, ISR/radar terms → speakable words |
 | **Pause/Resume/Stop** | Client-side audio controls + server-side cancellation |
 | **Fish Audio S2 Pro** | Alternate 5B-parameter TTS backend via MLX — selectable from Electron, Menu Bar, and Quick Action |
+| **AI Orb View** | Full-window dedicated visualizer — a reactive raymarched plasma orb that pulses to TTS audio. Toggle from the chat interface for a focused, message-list-free experience |
 
 ## Screenshots
 
@@ -29,6 +30,14 @@ https://github.com/user-attachments/assets/20c9442f-549c-4d97-aa9b-f0b8b75218fb
 
 <p align="center">
   <img src="Assets/History.jpeg" alt="History View" width="625" />
+</p>
+
+### AI Orb View
+
+A full-window dedicated visualizer mode — toggle in as an alternative to the standard chat-message interface. The orb is a raymarched volumetric plasma core with a translucent ice-blue rim disc whose edge warps organically over time. While the TTS is speaking, audio amplitude drives the plasma's internal energy in real time, so the orb visibly pulses with the voice. Designed for users who want a focused, distraction-free listening experience without the chat list visible.
+
+<p align="center">
+  <img src="Assets/ai-orb.jpeg" alt="AI Orb View" width="625" />
 </p>
 
 ## Requirements
