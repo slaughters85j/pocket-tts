@@ -292,20 +292,24 @@ void main() {
     // Cloud-edge soft glow accumulator: bright where the SDF is near zero.
     float glow = 0.015 / (0.015 + abs(d));
 
-    // Plasma body: deep purple #6b1fb8 → magenta #d946ef. Mix factor tied to
-    // glow so denser SDF samples lean magenta, diffuse falloff stays purple.
-    vec3 plasmaA = vec3(0.4196, 0.1216, 0.7216); // #6b1fb8
-    vec3 plasmaB = vec3(0.8510, 0.2745, 0.9373); // #d946ef
+    // Hot magenta body: deep magenta #a020c0 → hot pink #ff3df0. Denser SDF
+    // samples lean hot pink, diffuse falloff stays deep magenta. No white blow-
+    // out; the brightest spec stays in the pink/magenta range.
+    vec3 plasmaA = vec3(0.6275, 0.1255, 0.7529); // #a020c0
+    vec3 plasmaB = vec3(1.0000, 0.2392, 0.9412); // #ff3df0
     vec3 plasma  = mix(plasmaA, plasmaB, clamp(glow * 1.3, 0.0, 1.0)) * glow;
 
-    // Outer bloom shell — cyan #67e8f9, tighter falloff than the body.
-    vec3 outerBloom = vec3(0.4039, 0.9098, 0.9765) * pow(glow, 2.5);
+    // Inner violet sheen — cool violet #7c3aed mixed in at high-glow regions
+    // gives the orb a violet "heart" the way image 2's center does, instead of
+    // the original cyan secondary.
+    vec3 violet = vec3(0.4863, 0.2275, 0.9294) * pow(glow, 2.5);
 
-    // Hot white core — the lateral intersection hotspots. Small baseline so
-    // they stay visible at idle, then audio energy lifts.
-    vec3 white = vec3(1.0) * pow(glow, 10.0) * (0.08 + u_amp * 0.50);
+    // Hot pink rim hotspot. Replaces the white core that was blowing out the
+    // graphics — now the brightest pixels stay saturated pink instead of going
+    // to white.
+    vec3 rim = vec3(1.0, 0.45, 0.95) * pow(glow, 10.0) * (0.08 + u_amp * 0.50);
 
-    col += (plasma * 0.12) + (outerBloom * 0.15) + (white * 0.10);
+    col += (plasma * 0.12) + (violet * 0.15) + (rim * 0.10);
     t += max(abs(d) * 0.5, 0.02);
   }
 
@@ -313,11 +317,11 @@ void main() {
   float dist = length(vPosition.xy);
   col *= smoothstep(1.5, 0.8, dist);
 
-  // Halo — soft cyan glow extending beyond the orb silhouette. Inner color
-  // #06b6d4 closer in, outer color #0891b2 farther out. Peak intensity sits
-  // around r ≈ 1.0 (just outside the orb's 1.1 SDF radius).
-  vec3 haloInner = vec3(0.0235, 0.7137, 0.8314); // #06b6d4
-  vec3 haloOuter = vec3(0.0314, 0.5686, 0.6980); // #0891b2
+  // Halo — soft magenta glow extending beyond the orb silhouette. Inner color
+  // #d946ef (hot magenta) closer in, outer color #7c3aed (violet) farther out.
+  // Peak intensity sits around r ≈ 1.0 (just outside the orb's 1.1 SDF radius).
+  vec3 haloInner = vec3(0.8510, 0.2745, 0.9373); // #d946ef
+  vec3 haloOuter = vec3(0.4863, 0.2275, 0.9294); // #7c3aed
   float haloMask = smoothstep(0.7, 1.05, dist) * smoothstep(1.55, 1.05, dist);
   vec3 haloColor = mix(haloInner, haloOuter, smoothstep(0.9, 1.45, dist));
   col += haloColor * haloMask * 0.12;
