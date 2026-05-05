@@ -125,8 +125,8 @@ export function Orb({ playerRef, isActive }: OrbProps) {
       clearcoat: 1.0,
       clearcoatRoughness: 0.0,
       envMapIntensity: 1.0,
-      side: THREE.DoubleSide,
-      depthWrite: false,
+      side: THREE.FrontSide,
+      depthWrite: true,
     });
     ribbonMat.onBeforeCompile = (shader) => {
       shader.uniforms.u_time = ribbonUniforms.u_time;
@@ -183,22 +183,24 @@ gl_FragColor.a = mix(0.08, 1.0, edgeAlpha);`,
     // Shared geometry, four instances at different orientations.
     const ribbonGeom = new THREE.TorusGeometry(1.25, 0.2, 24, 200);
     const ribbon1 = new THREE.Mesh(ribbonGeom, ribbonMat);
-    const ribbon2 = new THREE.Mesh(ribbonGeom, ribbonMat);
-    const ribbon3 = new THREE.Mesh(ribbonGeom, ribbonMat);
-    const ribbon4 = new THREE.Mesh(ribbonGeom, ribbonMat);
+    // const ribbon2 = new THREE.Mesh(ribbonGeom, ribbonMat);
+    // const ribbon3 = new THREE.Mesh(ribbonGeom, ribbonMat);
+    // const ribbon4 = new THREE.Mesh(ribbonGeom, ribbonMat);
     // ribbon1 — horizontal equator (flat torus, no rotation)
     ribbon1.rotation.set(0, 0, 0);
+    ribbon1.renderOrder = -2;
+    ribbon1.position.z = -1.5;
     // ribbon2 — VERTICAL ribbon. Torus rotated 90° about X reads as an upright
     // band crossing the orb top-to-bottom. (Upper red arrow in reference.)
-    ribbon2.rotation.set(0, 0, 0);;
+    // ribbon2.rotation.set(0, 0, 0);
     // ribbon3 — VERTICAL-ish diagonal ribbon. Combined X/Y/Z tilt makes it
     // sweep down-and-around like an inclined meridian. (Lower red arrow.)
-    ribbon3.rotation.set(0, 0, 0);;
+    // ribbon3.rotation.set(0, 0, 0);
     // ribbon4 — secondary diagonal ribbon, mirror-tilted from ribbon3.
-    ribbon4.rotation.set(Math.PI / 6, -Math.PI / 4, Math.PI / 3);
-    ribbon3.scale.setScalar(0.88);
-    ribbon4.scale.setScalar(0.95);
-    scene.add(ribbon1, ribbon2, ribbon3, ribbon4);
+    // ribbon4.rotation.set(Math.PI / 6, -Math.PI / 4, Math.PI / 3);
+    // ribbon3.scale.setScalar(0.88);
+    // ribbon4.scale.setScalar(0.95);
+    scene.add(ribbon1);
 
     // MARK: Inner plasma. Raymarched volumetric singularity. The mesh is a
     // bounding box; the front face is the ray entry and the fragment shader
@@ -410,8 +412,8 @@ void main() {
       // ribbon and per axis ensure they never settle into a repeating pattern.
       ribbon1.rotation.x = Math.sin(t * 0.07) * 0.35;
       ribbon1.rotation.z = t * 0.03 + Math.cos(t * 0.11) * 0.20;
-      ribbon2.rotation.x = Math.PI / 2 + Math.sin(t * 0.09) * 0.40;
-      ribbon2.rotation.y = Math.cos(t * 0.06) * 0.25;
+      // ribbon2.rotation.x = Math.PI / 2 + Math.sin(t * 0.09) * 0.40;
+      // ribbon2.rotation.y = Math.cos(t * 0.06) * 0.25;
       // ribbon3.rotation.x — set ribbon3's X-axis rotation in radians, every frame.
       //   Math.PI / 1     → base tilt of π rad (180°). Equivalent to Math.PI;
       //                     dividing by 1 is a no-op kept for symmetry with the
@@ -423,12 +425,12 @@ void main() {
       //                     is scaled to ±0.45 rad around the base.
       // Net effect: ribbon3 sits flipped 180° around X, slowly wobbling ±25.8°
       // through that axis with a ~63-second period.
-      ribbon3.rotation.x = Math.PI / 1 + Math.sin(t * 0.10) * 0.45;
-      ribbon3.rotation.y = Math.PI / 1 + Math.cos(t * 0.13) * 0.35;
-      ribbon3.rotation.z = Math.PI / 6 + Math.sin(t * 0.08) * 0.30;
-      ribbon4.rotation.x = Math.PI / 6 + Math.cos(t * 0.12) * 0.40;
-      ribbon4.rotation.y = -Math.PI / 4 + Math.sin(t * 0.05) * 0.32;
-      ribbon4.rotation.z = Math.PI / 3 + Math.cos(t * 0.09) * 0.28;
+      // ribbon3.rotation.x = Math.PI / 1 + Math.sin(t * 0.10) * 0.45;
+      // ribbon3.rotation.y = Math.PI / 1 + Math.cos(t * 0.13) * 0.35;
+      // ribbon3.rotation.z = Math.PI / 6 + Math.sin(t * 0.08) * 0.30;
+      // ribbon4.rotation.x = Math.PI / 6 + Math.cos(t * 0.12) * 0.40;
+      // ribbon4.rotation.y = -Math.PI / 4 + Math.sin(t * 0.05) * 0.32;
+      // ribbon4.rotation.z = Math.PI / 3 + Math.cos(t * 0.09) * 0.28;
 
       composer.render();
       raf = requestAnimationFrame(tick);
