@@ -6,6 +6,8 @@ export type StreamingWavPlayerEvents = {
 
 export class StreamingWavPlayer {
   private audioContext: AudioContext;
+  private outputNode: GainNode;
+  private analyser: AnalyserNode | null = null;
   private sampleRate: number = 0;
   private numChannels: number = 0;
   private headerParsed: boolean = false;
@@ -22,7 +24,22 @@ export class StreamingWavPlayer {
 
   constructor(events: StreamingWavPlayerEvents = {}) {
     this.audioContext = new AudioContext();
+    // All BufferSources route through outputNode → destination, so an analyser
+    // can tap the same signal without reconnecting individual sources.
+    this.outputNode = this.audioContext.createGain();
+    this.outputNode.connect(this.audioContext.destination);
     this.events = events;
+  }
+
+  /** Returns a lazily-created AnalyserNode tapping the player's output (visualization). */
+  getAnalyser(): AnalyserNode {
+    if (!this.analyser) {
+      this.analyser = this.audioContext.createAnalyser();
+      this.analyser.fftSize = 256;
+      this.analyser.smoothingTimeConstant = 0.7;
+      this.outputNode.connect(this.analyser);
+    }
+    return this.analyser;
   }
 
   private parseWavHeader(header: Uint8Array): void {
@@ -87,7 +104,7 @@ export class StreamingWavPlayer {
 
     const source = this.audioContext.createBufferSource();
     source.buffer = audioBuffer;
-    source.connect(this.audioContext.destination);
+    source.connect(this.outputNode);
 
     const currentTime = this.audioContext.currentTime;
     const startTime = Math.max(currentTime, this.nextStartTime);
