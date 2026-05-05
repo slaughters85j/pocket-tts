@@ -105,7 +105,7 @@ export function Orb({ playerRef, isActive }: OrbProps) {
     const pmrem = new THREE.PMREMGenerator(renderer);
     const envTexture = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
     scene.environment = envTexture;
-    scene.environmentIntensity = 1.0;
+    scene.environmentIntensity = 0.35;
 
     // MARK: Cosmic ribbons. Three thin glass torus bands at different orientations
     // around the plasma core. A vertex-shader wave deforms each ribbon over time
@@ -118,14 +118,15 @@ export function Orb({ playerRef, isActive }: OrbProps) {
     const ribbonMat = new THREE.MeshPhysicalMaterial({
       color: 0xffffff,
       transmission: 1.0,
-      thickness: 0.25,
+      thickness: 0.05,
       roughness: 0.04,
       ior: 1.42,
       transparent: true,
       clearcoat: 1.0,
       clearcoatRoughness: 0.0,
-      envMapIntensity: 0.7,
+      envMapIntensity: 1.0,
       side: THREE.DoubleSide,
+      depthWrite: false,
     });
     ribbonMat.onBeforeCompile = (shader) => {
       shader.uniforms.u_time = ribbonUniforms.u_time;
@@ -171,11 +172,16 @@ float w3 = sin(phase + 4.189) * 0.5 + 0.5;
 float wsum = w1 + w2 + w3 + 0.001;
 vec3 accent = (blueEdge * w1 + goldEdge * w2 + rustEdge * w3) / wsum;
 
-totalEmissiveRadiance += accent * fres * 0.40;`,
+totalEmissiveRadiance += accent * fres * 0.15;`,
+      ).replace(
+        '#include <dithering_fragment>',
+        `#include <dithering_fragment>
+float edgeAlpha = pow(1.0 - max(dot(normalize(vNormal), normalize(vViewPosition)), 0.0), 3.5);
+gl_FragColor.a = mix(0.08, 1.0, edgeAlpha);`,
       );
     };
     // Shared geometry, four instances at different orientations.
-    const ribbonGeom = new THREE.TorusGeometry(1.05, 0.04, 24, 240);
+    const ribbonGeom = new THREE.TorusGeometry(1.25, 0.2, 24, 200);
     const ribbon1 = new THREE.Mesh(ribbonGeom, ribbonMat);
     const ribbon2 = new THREE.Mesh(ribbonGeom, ribbonMat);
     const ribbon3 = new THREE.Mesh(ribbonGeom, ribbonMat);
@@ -297,7 +303,7 @@ void main() {
 
     // Hot white core — the lateral intersection hotspots. Small baseline so
     // they stay visible at idle, then audio energy lifts.
-    vec3 white = vec3(1.0) * pow(glow, 10.0) * (0.20 + u_amp * 0.80);
+    vec3 white = vec3(1.0) * pow(glow, 10.0) * (0.08 + u_amp * 0.50);
 
     col += (plasma * 0.12) + (outerBloom * 0.15) + (white * 0.10);
     t += max(abs(d) * 0.5, 0.02);
@@ -314,7 +320,7 @@ void main() {
   vec3 haloOuter = vec3(0.0314, 0.5686, 0.6980); // #0891b2
   float haloMask = smoothstep(0.7, 1.05, dist) * smoothstep(1.55, 1.05, dist);
   vec3 haloColor = mix(haloInner, haloOuter, smoothstep(0.9, 1.45, dist));
-  col += haloColor * haloMask * 0.25;
+  col += haloColor * haloMask * 0.12;
 
   gl_FragColor = vec4(col, 1.0);
 }
@@ -341,9 +347,9 @@ void main() {
     composer.addPass(new RenderPass(scene, camera));
     const bloom = new UnrealBloomPass(
       new THREE.Vector2(canvas.clientWidth, canvas.clientHeight),
-      0.28, // strength (was 0.42, the orb glow was overcooking)
-      0.40, // radius (was 0.55)
-      0.92, // threshold (was 0.85, only the brightest pixels bloom now)
+      0.16, // strength
+      0.40, // radius
+      0.97, // threshold — only near-white peaks bloom, kills the body wash-out
     );
     composer.addPass(bloom);
     composer.addPass(new OutputPass());
