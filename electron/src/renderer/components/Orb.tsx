@@ -180,9 +180,15 @@ totalEmissiveRadiance += accent * fres * 0.40;`,
     const ribbon2 = new THREE.Mesh(ribbonGeom, ribbonMat);
     const ribbon3 = new THREE.Mesh(ribbonGeom, ribbonMat);
     const ribbon4 = new THREE.Mesh(ribbonGeom, ribbonMat);
+    // ribbon1 — horizontal equator (flat torus, no rotation)
     ribbon1.rotation.set(0, 0, 0);
-    ribbon2.rotation.set(Math.PI / 2, 0, 0);
-    ribbon3.rotation.set(Math.PI / 4, Math.PI / 3, Math.PI / 6);
+    // ribbon2 — VERTICAL ribbon. Torus rotated 90° about X reads as an upright
+    // band crossing the orb top-to-bottom. (Upper red arrow in reference.)
+    ribbon2.rotation.set(0, 0, 0);;
+    // ribbon3 — VERTICAL-ish diagonal ribbon. Combined X/Y/Z tilt makes it
+    // sweep down-and-around like an inclined meridian. (Lower red arrow.)
+    ribbon3.rotation.set(0, 0, 0);;
+    // ribbon4 — secondary diagonal ribbon, mirror-tilted from ribbon3.
     ribbon4.rotation.set(Math.PI / 6, -Math.PI / 4, Math.PI / 3);
     ribbon3.scale.setScalar(0.88);
     ribbon4.scale.setScalar(0.95);
@@ -232,7 +238,7 @@ mat3 rotY(float a) { float c = cos(a); float s = sin(a); return mat3(c, 0.0, s, 
 // non-uniformly along its length.
 float getBeam(vec3 p) {
   float beamSDF = length(p.yz) - 0.08;
-  vec3 q = p * vec3(0.4, 2.0, 1.0) + (u_time * 0.1);
+  vec3 q = p * vec3(0.4, 2.0, 1.0) + (u_time * 0.04);
   float noise = 0.0;
   float amp = 0.5;
   for (int i = 0; i < 5; i++) {
@@ -249,11 +255,11 @@ float getBeam(vec3 p) {
 float mapField(vec3 p) {
   float res = length(p) - 1.1;
 
-  vec3 q = p * 1.2 + (u_time * 0.1);
+  vec3 q = p * 1.2 + (u_time * 0.04);
   float f = 0.0;
   float amp = 0.5 + (u_amp * 0.4);
   for (int i = 0; i < 6; i++) {
-    q = rotY(u_time * 0.02) * q;
+    q = rotY(u_time * 0.008) * q;
     f += amp * abs(sin(q.x + sin(q.y + sin(q.z))));
     q *= 1.7;
     amp *= 0.5;
@@ -280,19 +286,35 @@ void main() {
     // Cloud-edge soft glow accumulator: bright where the SDF is near zero.
     float glow = 0.015 / (0.015 + abs(d));
 
-    vec3 purple = vec3(0.7, 0.0, 1.0) * glow;
-    vec3 cyan   = vec3(0.2, 0.8, 1.0) * pow(glow, 2.5);
-    // Hot white core — the lateral intersection hotspots. Small baseline so
-    // the intersection points stay visible at idle, then audio energy lifts.
-    vec3 white  = vec3(1.0) * pow(glow, 10.0) * (0.20 + u_amp * 0.80);
+    // Plasma body: deep purple #6b1fb8 → magenta #d946ef. Mix factor tied to
+    // glow so denser SDF samples lean magenta, diffuse falloff stays purple.
+    vec3 plasmaA = vec3(0.4196, 0.1216, 0.7216); // #6b1fb8
+    vec3 plasmaB = vec3(0.8510, 0.2745, 0.9373); // #d946ef
+    vec3 plasma  = mix(plasmaA, plasmaB, clamp(glow * 1.3, 0.0, 1.0)) * glow;
 
-    col += (purple * 0.12) + (cyan * 0.15) + (white * 0.10);
+    // Outer bloom shell — cyan #67e8f9, tighter falloff than the body.
+    vec3 outerBloom = vec3(0.4039, 0.9098, 0.9765) * pow(glow, 2.5);
+
+    // Hot white core — the lateral intersection hotspots. Small baseline so
+    // they stay visible at idle, then audio energy lifts.
+    vec3 white = vec3(1.0) * pow(glow, 10.0) * (0.20 + u_amp * 0.80);
+
+    col += (plasma * 0.12) + (outerBloom * 0.15) + (white * 0.10);
     t += max(abs(d) * 0.5, 0.02);
   }
 
   // Plane corners fade to black so the rectangular boundary is invisible.
   float dist = length(vPosition.xy);
   col *= smoothstep(1.5, 0.8, dist);
+
+  // Halo — soft cyan glow extending beyond the orb silhouette. Inner color
+  // #06b6d4 closer in, outer color #0891b2 farther out. Peak intensity sits
+  // around r ≈ 1.0 (just outside the orb's 1.1 SDF radius).
+  vec3 haloInner = vec3(0.0235, 0.7137, 0.8314); // #06b6d4
+  vec3 haloOuter = vec3(0.0314, 0.5686, 0.6980); // #0891b2
+  float haloMask = smoothstep(0.7, 1.05, dist) * smoothstep(1.55, 1.05, dist);
+  vec3 haloColor = mix(haloInner, haloOuter, smoothstep(0.9, 1.45, dist));
+  col += haloColor * haloMask * 0.25;
 
   gl_FragColor = vec4(col, 1.0);
 }
@@ -341,6 +363,7 @@ void main() {
     resize();
 
     // MARK: Animation loop. Speaking-mode only. Audio amplitude is the sole driver.
+    // Capped at 30 Hz to keep GPU load bounded on high-refresh displays.
     const start = performance.now();
     const fftBins = 64;
     const dataArray = new Uint8Array(fftBins);
@@ -379,8 +402,19 @@ void main() {
       ribbon1.rotation.z = t * 0.03 + Math.cos(t * 0.11) * 0.20;
       ribbon2.rotation.x = Math.PI / 2 + Math.sin(t * 0.09) * 0.40;
       ribbon2.rotation.y = Math.cos(t * 0.06) * 0.25;
-      ribbon3.rotation.x = Math.PI / 4 + Math.sin(t * 0.10) * 0.45;
-      ribbon3.rotation.y = Math.PI / 3 + Math.cos(t * 0.13) * 0.35;
+      // ribbon3.rotation.x — set ribbon3's X-axis rotation in radians, every frame.
+      //   Math.PI / 1     → base tilt of π rad (180°). Equivalent to Math.PI;
+      //                     dividing by 1 is a no-op kept for symmetry with the
+      //                     other "Math.PI / N" lines around it.
+      //   Math.sin(t * 0.10) → slow oscillator. `t` is seconds since mount; 0.10 is
+      //                     the angular frequency, so one full sine cycle takes
+      //                     2π / 0.10 ≈ 62.8 seconds. Output is in [-1, 1].
+      //   * 0.45          → wobble amplitude in radians (~25.8°). The sine output
+      //                     is scaled to ±0.45 rad around the base.
+      // Net effect: ribbon3 sits flipped 180° around X, slowly wobbling ±25.8°
+      // through that axis with a ~63-second period.
+      ribbon3.rotation.x = Math.PI / 1 + Math.sin(t * 0.10) * 0.45;
+      ribbon3.rotation.y = Math.PI / 1 + Math.cos(t * 0.13) * 0.35;
       ribbon3.rotation.z = Math.PI / 6 + Math.sin(t * 0.08) * 0.30;
       ribbon4.rotation.x = Math.PI / 6 + Math.cos(t * 0.12) * 0.40;
       ribbon4.rotation.y = -Math.PI / 4 + Math.sin(t * 0.05) * 0.32;
