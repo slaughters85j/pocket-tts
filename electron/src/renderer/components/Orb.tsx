@@ -261,6 +261,9 @@ export function Orb({ playerRef, isActive }: OrbProps) {
       plasmaUniforms.uIntensity.value = 0.2 + smoothAmp * 0.8;
 
       discMat.uniforms.u_time.value = timeMs / 1000;
+      // Disc expands with audio amplitude — same driver as the plasma's energy.
+      // 1.0 idle, up to 1.15 at peak.
+      disc.scale.setScalar(1.0 + smoothAmp * 0.15);
 
       renderer.render(scene, camera);
       raf = requestAnimationFrame(tick);
