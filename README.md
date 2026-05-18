@@ -1,5 +1,11 @@
 # Pocket TTS — macOS Desktop Fork
 
+> ### Pocket TTS macOS (Native Swift App) is now available
+>
+> A fully native macOS rewrite of this app is now available at **[pocket-tts-macos](https://github.com/slaughters85j/pocket-tts-macos)**. It replaces the Electron + Python stack with a single `.app` — no Python runtime, no server process, no PyInstaller bundle. Runs Pocket-TTS via Core ML and Fish Audio S2 Pro via MLX, with sub-second first-audio latency on Apple Silicon. Includes everything from this Electron version plus unified voice management, a native MimiEncoder port, and Metal orb visualizer.
+>
+> **This Electron version continues to work** and remains the reference implementation, but active development has moved to the native app.
+
 <img width="1446" height="622" alt="pocket-tts-logo-v2-transparent" src="https://github.com/user-attachments/assets/637b5ed6-831f-4023-9b4c-741be21ab238" />
 
 A macOS-native fork of [Kyutai's Pocket TTS](https://github.com/kyutai-labs/pocket-tts) — a ~100M-parameter CPU-only text-to-speech engine. This fork wraps the original Python library in an Electron desktop app, a macOS Quick Action for system-wide text reading, and a Swift menu bar companion app. Voice enhancement via [LavaSR](https://github.com/ysharma3501/LavaSR) is integrated directly into the app.
